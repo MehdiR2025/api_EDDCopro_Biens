@@ -1,0 +1,1017 @@
+Ce document est la source de vérité unique.
+Toute implémentation doit le respecter strictement.
+Prompt  API EDD V1.5 :
+RÈGLE ABSOLUE (READ FIRST)
+You must implement strictly what is described below.
+You MUST NOT:
+- rename tables or columns,
+- add tables not explicitly listed,
+- change the JSON response contract,
+- infer business rules from the sample files,
+- create mutations-related tables or features,
+- create contact relations tables.
+
+The provided Excel files are examples for format verification only. The business logic comes ONLY from this prompt.
+
+========================================================
+1) CONTEXT & GOAL
+========================================================
+You are a Supabase engineer (Postgres + Storage + Edge Functions in Deno/TypeScript).
+
+Goal:
+Deliver a robust V1.5 of an EDD import API to create “units” (biens) of a condo (copropriété) inside a real-estate CRM.
+The API is called from a CRM copro record page: units created by this API are always in copro (units.copro_id NOT NULL).
+
+The import uses exactly 3 Excel .xlsx files with FIXED headers:
+1) EDD VF: required headers: NumLot, Etage, TypeLot (otherwise job failed)
+   other headers may be present:
+   Batiment, Escalier␠(attention: trailing space), NbPieces, SurfaceLot, NumPorte, Exterieurs,
+   AnnexeLot, SurfaceExterieurs, QuotesPartsGenerales, Quotes-parts Bâtiments,
+   Quotes-parts Ascenseurs, Quotes-parts Escaliers, Quotes-parts Chauffage,
+   Montant Fond travaux, Observations, DateArrivee
+2) lot_ref: required headers: Référence, N° lot
+3) contacts: required headers: Référence, Civilité, Nom (Prénom optional), + address + coordinates
+
+========================================================
+2) TECHNOLOGIES
+========================================================
+- Supabase Postgres: tables + constraints + trigger lots_count
+- Supabase Storage: .xlsx files
+- Supabase Edge Function Deno/TS: endpoint POST /functions/v1/edd-import
+- Excel parsing via xlsx library (or equivalent)
+
+========================================================
+3) FRONT CONTRACT — EXPECTED JSON RESPONSE (MANDATORY)
+========================================================
+The Edge Function MUST return JSON strictly matching one of the three contracts below.
+This JSON is consumed directly by the Lovable front-end without transformation.
+
+SUCCESS (no review required):
+{
+  "job_id": "UUID",
+  "status": "completed",
+  "stats": {
+    "lots_upserted": number,
+    "contacts_upserted": number,
+    "units_created": number,
+    "unit_lots_created": number,
+    "unit_owners_created": number,
+    "reviews_created": number,
+    "issues_warning": number,
+    "issues_error": number
+  },
+  "reviews": [],
+  "errors": []
+}
+
+SUCCESS (review required):
+{
+  "job_id": "UUID",
+  "status": "completed_with_review_required",
+  "stats": {
+    "lots_upserted": number,
+    "contacts_upserted": number,
+    "units_created": number,
+    "unit_lots_created": number,
+    "unit_owners_created": number,
+    "reviews_created": number,
+    "issues_warning": number,
+    "issues_error": number
+  },
+  "reviews": [
+    {
+      "review_id": "UUID",
+      "owner_ref": string,
+      "display_name": string,
+      "contact_category": "physical" | "legal_entity" | "group",
+      "legal_form": "STE" | "SCI" | "SDC" | null,
+      "group_type": "INDIV" | "CONSOR" | "SUCESS" | null,
+      "main_hab_lots": string[],
+      "dep_lots": string[],
+      "reason": "multiple_habitation_main_lots"
+    }
+  ],
+  "errors": []
+}
+
+FAILED:
+{
+  "job_id": "UUID",
+  "status": "failed",
+  "stats": null,
+  "reviews": [],
+  "errors": [
+    {
+      "code": string,
+      "message": string,
+      "entity": string,
+      "column": string (optional)
+    }
+  ]
+}
+
+IMPORTANT:
+- Always include job_id, status, stats, reviews, errors.
+- stats MUST be null when status="failed".
+- reviews MUST be empty array if none.
+- errors MUST be empty array if none.
+- Do not include raw SQL errors or stack traces.
+
+========================================================
+4) NOMENCLATURE TABLES (MANDATORY)
+========================================================
+You MUST implement these tables (exact names):
+copros, lots, units, unit_lots, contacts, unit_owners,
+addresses, parcels, copro_addresses, copro_parcels, unit_addresses, unit_parcels,
+unit_build_reviews, import_jobs, data_issues.
+
+All tables are multi-tenant: tenant_id uuid NOT NULL in every table (including link tables).
+
+========================================================
+5) DATABASE SCHEMA & FIELD NOMENCLATURE (MANDATORY)
+========================================================
+Do NOT rename tables or fields.
+Do NOT add extra tables or fields unless explicitly specified.
+All foreign keys must be enforced.
+
+Use uuid PKs as below, and created_at timestamptz default now() where relevant.
+
+--------------------------------
+TABLE: copros
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+- name text NULL
+- created_at timestamptz NOT NULL default now()
+
+--------------------------------
+TABLE: addresses
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+- label text NOT NULL
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, label)
+
+--------------------------------
+TABLE: parcels
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+- cadastral_ref text NOT NULL
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, cadastral_ref)
+
+--------------------------------
+LINK TABLE: copro_addresses
+--------------------------------
+- tenant_id uuid NOT NULL
+- copro_id uuid NOT NULL FK -> copros(id)
+- address_id uuid NOT NULL FK -> addresses(id)
+- role text NOT NULL CHECK (role in ('main','secondary'))
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, copro_id, address_id)
+
+--------------------------------
+LINK TABLE: copro_parcels
+--------------------------------
+- tenant_id uuid NOT NULL
+- copro_id uuid NOT NULL FK -> copros(id)
+- parcel_id uuid NOT NULL FK -> parcels(id)
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, copro_id, parcel_id)
+
+--------------------------------
+TABLE: import_jobs
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+- copro_id uuid NOT NULL FK -> copros(id)
+- status text NOT NULL CHECK (status in ('queued','running','completed','completed_with_review_required','failed'))
+- files jsonb NOT NULL
+- stats jsonb NULL
+- created_at timestamptz NOT NULL default now()
+- started_at timestamptz NULL
+- ended_at timestamptz NULL
+
+--------------------------------
+TABLE: data_issues
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- job_id uuid NOT NULL FK -> import_jobs(id)
+- tenant_id uuid NOT NULL
+- severity text NOT NULL CHECK (severity in ('warning','error'))
+- code text NOT NULL
+- entity_type text NOT NULL
+- entity_key text NULL
+- message text NOT NULL
+- payload jsonb NULL
+- created_at timestamptz NOT NULL default now()
+
+--------------------------------
+TABLE: contacts (V1.5)
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+
+- external_ref text NOT NULL            -- Référence (owner_ref)
+- civility_raw text NOT NULL
+
+- contact_category text NOT NULL CHECK (contact_category in ('physical','legal_entity','group'))
+- legal_form text NULL CHECK (legal_form is null or legal_form in ('STE','SCI','SDC'))
+- group_type text NULL CHECK (group_type is null or group_type in ('INDIV','CONSOR','SUCESS'))
+
+- first_name text NULL
+- last_name_or_name text NOT NULL
+- display_name text NOT NULL
+
+- address_line1 text NULL
+- address_line2 text NULL
+- postcode text NULL
+- city text NULL
+- country text NULL
+
+- email text NULL
+- phone1 text NULL
+- phone2 text NULL
+
+- created_at timestamptz NOT NULL default now()
+
+UNIQUE (tenant_id, external_ref)
+
+--------------------------------
+TABLE: lots
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+- copro_id uuid NOT NULL FK -> copros(id)
+
+- lot_number text NOT NULL              -- NumLot
+- floor_label text NOT NULL             -- Etage
+- lot_type_label text NOT NULL          -- TypeLot
+
+- lot_family text NOT NULL CHECK (lot_family in ('MAIN_HABITATION','MAIN_COMMERCE','DEPENDANCE'))
+
+- surface_m2 numeric NULL               -- SurfaceLot
+- exteriors jsonb NULL                  -- parsed Exterieurs + SurfaceExterieurs
+
+- tantiemes_general_num int NULL
+- tantiemes_general_den int NULL
+- tantiemes_asc_num int NULL
+- tantiemes_asc_den int NULL
+- tantiemes_stairs_num int NULL
+- tantiemes_stairs_den int NULL
+- tantiemes_heat_num int NULL
+- tantiemes_heat_den int NULL
+
+- observations text NULL                -- Observations store as-is
+- acquired_at date NULL                 -- DateArrivee
+
+- source_job_id uuid NULL FK -> import_jobs(id)
+- created_at timestamptz NOT NULL default now()
+
+UNIQUE (tenant_id, copro_id, lot_number)
+
+--------------------------------
+TABLE: units
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+- copro_id uuid NOT NULL FK -> copros(id)
+
+- unit_type text NOT NULL CHECK (unit_type in ('habitation','commercial','dependance'))
+- status text NOT NULL CHECK (status in ('active'))
+
+- main_lot_number text NULL
+- lots_count int NOT NULL DEFAULT 0     -- maintained by trigger
+- source_owner_external_ref text NULL
+- source_job_id uuid NULL FK -> import_jobs(id)
+
+- created_at timestamptz NOT NULL default now()
+
+--------------------------------
+LINK TABLE: unit_lots
+--------------------------------
+- tenant_id uuid NOT NULL
+- unit_id uuid NOT NULL FK -> units(id) ON DELETE CASCADE
+- lot_id uuid NOT NULL FK -> lots(id)
+- role text NOT NULL CHECK (role in ('main','annex'))
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, unit_id, lot_id)
+
+--------------------------------
+LINK TABLE: unit_owners
+--------------------------------
+- tenant_id uuid NOT NULL
+- unit_id uuid NOT NULL FK -> units(id) ON DELETE CASCADE
+- contact_id uuid NOT NULL FK -> contacts(id)
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, unit_id, contact_id)
+
+--------------------------------
+LINK TABLE: unit_addresses
+--------------------------------
+- tenant_id uuid NOT NULL
+- unit_id uuid NOT NULL FK -> units(id) ON DELETE CASCADE
+- address_id uuid NOT NULL FK -> addresses(id)
+- role text NOT NULL CHECK (role in ('main','secondary'))
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, unit_id, address_id)
+
+--------------------------------
+LINK TABLE: unit_parcels
+--------------------------------
+- tenant_id uuid NOT NULL
+- unit_id uuid NOT NULL FK -> units(id) ON DELETE CASCADE
+- parcel_id uuid NOT NULL FK -> parcels(id)
+- created_at timestamptz NOT NULL default now()
+UNIQUE (tenant_id, unit_id, parcel_id)
+
+--------------------------------
+TABLE: unit_build_reviews
+--------------------------------
+- id uuid PK default gen_random_uuid()
+- tenant_id uuid NOT NULL
+- copro_id uuid NOT NULL FK -> copros(id)
+- job_id uuid NOT NULL FK -> import_jobs(id)
+
+- owner_ref text NOT NULL
+- status text NOT NULL CHECK (status in ('pending_review'))
+- reason text NOT NULL CHECK (reason in ('multiple_habitation_main_lots'))
+
+- lots_in_scope jsonb NOT NULL
+- proposals jsonb NOT NULL
+- created_at timestamptz NOT NULL default now()
+
+--------------------------------
+MANDATORY DB/TRIGGER BEHAVIOR
+--------------------------------
+- units.lots_count MUST be maintained automatically by a database trigger on unit_lots.
+- Trigger MUST handle insert/delete AND update (unit_id change or role change).
+- Do NOT compute lots_count in application code.
+- No mutations table must be created.
+- No contact relations table must be created.
+- All logs must go through data_issues.
+
+========================================================
+6) EXPECTED DATABASE INDEXES (MANDATORY)
+========================================================
+Create these indexes in addition to PKs and UNIQUE constraints. Do NOT invent extra indexes.
+
+TABLE: copros
+- INDEX (tenant_id)
+
+TABLE: addresses
+- UNIQUE (tenant_id, label) (already above)
+- INDEX (tenant_id)
+
+TABLE: parcels
+- UNIQUE (tenant_id, cadastral_ref) (already above)
+- INDEX (tenant_id)
+
+TABLE: copro_addresses
+- UNIQUE (tenant_id, copro_id, address_id) (already above)
+- INDEX (copro_id)
+- INDEX (address_id)
+- INDEX (role)
+
+TABLE: copro_parcels
+- UNIQUE (tenant_id, copro_id, parcel_id) (already above)
+- INDEX (copro_id)
+- INDEX (parcel_id)
+
+TABLE: import_jobs
+- INDEX (tenant_id)
+- INDEX (copro_id)
+- INDEX (status)
+- INDEX (created_at)
+
+TABLE: data_issues
+- INDEX (tenant_id)
+- INDEX (job_id)
+- INDEX (severity)
+- INDEX (code)
+
+TABLE: contacts
+- UNIQUE (tenant_id, external_ref) (already above)
+- INDEX (tenant_id)
+- INDEX (contact_category)
+- INDEX (legal_form)
+- INDEX (group_type)
+
+TABLE: lots
+- UNIQUE (tenant_id, copro_id, lot_number) (already above)
+- INDEX (tenant_id)
+- INDEX (copro_id)
+- INDEX (lot_family)
+- INDEX (lot_type_label)
+
+TABLE: units
+- INDEX (tenant_id)
+- INDEX (copro_id)
+- INDEX (unit_type)
+- INDEX (status)
+- INDEX (source_owner_external_ref)
+
+TABLE: unit_lots
+- UNIQUE (tenant_id, unit_id, lot_id) (already above)
+- INDEX (unit_id)
+- INDEX (lot_id)
+- INDEX (role)
+
+TABLE: unit_owners
+- UNIQUE (tenant_id, unit_id, contact_id) (already above)
+- INDEX (unit_id)
+- INDEX (contact_id)
+
+TABLE: unit_addresses
+- UNIQUE (tenant_id, unit_id, address_id) (already above)
+- INDEX (unit_id)
+- INDEX (address_id)
+- INDEX (role)
+
+TABLE: unit_parcels
+- UNIQUE (tenant_id, unit_id, parcel_id) (already above)
+- INDEX (unit_id)
+- INDEX (parcel_id)
+
+TABLE: unit_build_reviews
+- INDEX (tenant_id)
+- INDEX (copro_id)
+- INDEX (status)
+- INDEX (owner_ref)
+
+========================================================
+7) INPUT FILES, REQUIRED HEADERS & MAPPING (MANDATORY)
+========================================================
+The import ALWAYS receives exactly 3 Excel .xlsx files.
+Files are stored in Supabase Storage. The Edge Function receives their Storage paths in the request body.
+SHEET: use the first worksheet.
+
+-------------------------------------------------------
+FILE #1: EDD VF (LOTS)
+-------------------------------------------------------
+REQUIRED HEADERS (must exist, otherwise FAIL the job):
+- "NumLot"
+- "Etage"
+- "TypeLot"
+
+OPTIONAL HEADERS (use if present, do not fail if missing):
+- "SurfaceLot"
+- "Exterieurs"
+- "SurfaceExterieurs"
+- "QuotesPartsGenerales"
+- "Quotes-parts Ascenseurs"
+- "Quotes-parts Escaliers"
+- "Quotes-parts Chauffage"
+- "Quotes-parts Bâtiments"
+- "Observations"
+- "DateArrivee"
+- "Batiment"
+- "Escalier "   (IMPORTANT: header contains a trailing space)
+- "NbPieces"
+- "NumPorte"
+- "AnnexeLot"
+- "Montant Fond travaux"
+
+MAPPING EDD -> lots table:
+- lots.lot_number      = EDD["NumLot"] (string, required)
+- lots.floor_label     = EDD["Etage"] (string, required)
+- lots.lot_type_label  = EDD["TypeLot"] (string, required)
+- lots.surface_m2      = parse numeric from EDD["SurfaceLot"] (nullable; decimals '.' or ',')
+- lots.observations    = EDD["Observations"] (text, nullable, store as-is)
+- lots.acquired_at     = parse date from EDD["DateArrivee"] (nullable)
+
+EXTERIORS PARSING RULES:
+- If EDD["Exterieurs"] is empty => lots.exteriors = null
+- Otherwise split by "," into exterior types and trim.
+- If there is exactly 1 exterior type:
+   - SurfaceExterieurs may be decimal "12.5" or "12,5"
+- If there are multiple exterior types:
+   - SurfaceExterieurs contains multiple surfaces separated by ", " (comma + SPACE), ex: "12, 116"
+   - The order matches the exterior types.
+- Surfaces may be decimals with '.' or ',' for decimal separator.
+- If exterior count != surface count => write WARNING issue code "edd_exteriors_surface_count_mismatch"
+- Store lots.exteriors as JSON array like:
+  [{"type":"Balcon","surface_m2":12.0},{"type":"Terrasse","surface_m2":116.0}]
+
+TANTIEMES PARSING RULES (for each QuotesParts* column):
+- Values may be:
+   A) integer string "411"
+   B) fraction string "411/10000"
+- Store as *_num and *_den:
+   - if fraction => num=411, den=10000
+   - if integer only => num=411, den=NULL and write WARNING "tantieme_denominator_missing"
+- If invalid format => WARNING "edd_tantieme_invalid_format"
+- If SurfaceLot invalid => WARNING "edd_surface_lot_invalid"
+- If DateArrivee invalid => WARNING "edd_date_arrivee_invalid"
+
+-------------------------------------------------------
+FILE #2: lot_ref (OWNER_REF -> LOTS)
+-------------------------------------------------------
+REQUIRED HEADERS (must exist, otherwise FAIL the job):
+- "Référence"
+- "N° lot"
+
+MAPPING lot_ref:
+- owner_ref   = lot_ref["Référence"] (string)
+- lot_number  = lot_ref["N° lot"] (string)
+
+RULES:
+- Each lot_number must exist in EDD.NumLot
+  - If not, WARNING "owner_link_without_lot"
+- If an EDD lot has no owner_ref in lot_ref, WARNING "missing_owner_link"
+
+-------------------------------------------------------
+FILE #3: contacts (OWNER CONTACTS)
+-------------------------------------------------------
+REQUIRED HEADERS (must exist, otherwise FAIL the job):
+- "Référence"
+- "Civilité"
+- "Nom"
+
+OPTIONAL HEADERS:
+- "Prénom"
+- "Adresse 1"
+- "Adresse 2"
+- "Code postal"
+- "Ville"
+- "Pays"
+- "e-mail"
+- "Téléphone 1"
+- "Téléphone 2"
+
+MAPPING contacts -> contacts table:
+- contacts.external_ref      = contacts["Référence"]
+- contacts.civility_raw      = contacts["Civilité"]
+- contacts.first_name        = contacts["Prénom"] (nullable)
+- contacts.last_name_or_name = contacts["Nom"] (required)
+- contacts.email             = contacts["e-mail"] (nullable)
+- contacts.phone1            = contacts["Téléphone 1"] (nullable)
+- contacts.phone2            = contacts["Téléphone 2"] (nullable)
+- contacts.address_line1     = contacts["Adresse 1"] (nullable)
+- contacts.address_line2     = contacts["Adresse 2"] (nullable)
+- contacts.postcode          = contacts["Code postal"] (nullable)
+- contacts.city              = contacts["Ville"] (nullable)
+- contacts.country           = contacts["Pays"] (nullable)
+
+DISPLAY NAME RULE:
+- If contact_category=physical:
+   display_name = (Prénom if present) + " " + Nom else Nom
+- Else (legal_entity or group):
+   display_name = Nom
+
+CIVILITY -> CONTACT TYPE (V1.5):
+- "Monsieur" | "Madame" | "Monsieur ou Madame" => contact_category="physical"
+- "STE" | "SCI" | "SDC" => contact_category="legal_entity" and legal_form = same value
+- "INDIV" | "CONSOR" | "SUCESS" => contact_category="group" and group_type = same value
+- Otherwise => WARNING "contacts_unknown_civility_value" but still store civility_raw and set contact_category="physical" as default fallback.
+
+RULE:
+- If an owner_ref exists in lot_ref but no matching contacts.Référence row => WARNING "missing_contact_for_owner_ref"
+
+========================================================
+8) BUSINESS RULES — UNITS (BIENS)
+========================================================
+Owner link:
+- The owner link key is lot_ref."Référence" (owner_ref).
+- lot_ref associates owner_ref to "N° lot".
+
+Lot enrichment:
+- For each owner_ref, get its lots and enrich from EDD by NumLot.
+- Classify each lot into lot_family:
+  MAIN_HABITATION / MAIN_COMMERCE / DEPENDANCE via TypeLot keyword mapping (configurable list).
+- Unknown TypeLot mapping => WARNING "unknown_lot_type_mapping" and default lot_family=DEPENDANCE.
+
+Review case:
+- If owner_ref has >= 2 MAIN_HABITATION lots:
+   -> create unit_build_reviews (status="pending_review", reason="multiple_habitation_main_lots")
+      lots_in_scope JSON
+      proposals JSON (P1 split, P2 merge)
+   -> do NOT create any unit for that owner_ref.
+
+Normal case:
+- If exactly 1 main lot (habitation OR commerce):
+   -> create unit (unit_type habitation or commercial), status="active"
+   -> create unit_lots (main + annex)
+   -> create unit_owners (unit -> contact)
+   -> link unit to copro main address + all copro parcels via unit_addresses/unit_parcels
+
+Dependance-only case:
+- If no main lot:
+   -> create 1 unit per dependance type (normalized lot_type_label)
+   -> attach lots accordingly
+
+========================================================
+9) ADDRESSES / PARCELS (CRM INPUT)
+========================================================
+API input provides:
+- copro_addresses: [{label, role}] at least 1 (must include role="main")
+- copro_cadastral_refs: [string] at least 1
+
+Implement upsert:
+- addresses(label)
+- parcels(cadastral_ref)
+Link to copro via:
+- copro_addresses
+- copro_parcels
+
+For each created unit:
+- create unit_addresses (role=main -> copro main address)
+- create unit_parcels (all copro parcels)
+
+========================================================
+10) IMPORT JOB + LOGS (MANDATORY)
+========================================================
+- Create import_jobs status="running" at start.
+- Any anomaly MUST write data_issues:
+  * missing header => error + job failed
+  * missing contact for owner_ref => warning
+  * lot_ref lot absent EDD => warning
+  * lot EDD sans owner_ref => warning
+  * surface invalid => warning
+  * tantième invalid => warning
+- Finish import_jobs status:
+  * completed
+  * completed_with_review_required (if reviews_created > 0)
+  * failed
+
+FAIL RULE:
+If any REQUIRED HEADER is missing in any file:
+- write data_issues severity="error" with:
+  edd_missing_required_column OR lot_ref_missing_required_column OR contacts_missing_required_column
+- set import_jobs.status="failed"
+- return FAILED JSON contract (stats=null)
+
+========================================================
+11) API ENDPOINT & REQUEST BODY (MANDATORY)
+========================================================
+Endpoint:
+POST /functions/v1/edd-import
+
+Request JSON must include at least:
+{
+  "tenant_id": "UUID",
+  "copro_id": "UUID",
+  "copro_addresses": [{"label":"...", "role":"main"}],
+  "copro_cadastral_refs": ["..."],
+  "files": {
+    "edd_path": "storage/path.xlsx",
+    "lot_ref_path": "storage/path.xlsx",
+    "contacts_path": "storage/path.xlsx"
+  }
+}
+
+========================================================
+12) DELIVERABLES
+========================================================
+You must output:
+1) One SQL migration script ready to paste into Supabase SQL editor:
+   - tables, enums/checks, indexes, uniques, foreign keys, trigger lots_count
+2) Full Edge Function code `edd-import` (Deno TS) reading files from Storage paths.
+3) Postman example request + 3 example responses: success / review / failed.
+
+========================================================
+13) FILES DISCLAIMER
+========================================================
+Here are the 3 real Excel files used by the API.
+They respect the fixed headers described above.
+Use them ONLY to verify formats, NOT to redefine business rules. 
+
+ANNEXE TECHNIQUE — API EDD V1.5
+A) Schéma Postgres (Supabase) — Tables, champs, types, contraintes
+Conventions globales
+•	Toutes les tables : tenant_id uuid NOT NULL
+•	PK : id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+•	Timestamps : created_at timestamptz NOT NULL DEFAULT now() quand pertinent
+•	Toutes les FK sont enforced
+•	Aucune table liée aux mutations
+•	Aucune table de relations entre contacts
+________________________________________
+A1) Référentiel Copro / Adresses / Parcelles
+copros
+•	id uuid pk
+•	tenant_id uuid not null
+•	name text null
+•	created_at timestamptz not null default now()
+addresses
+•	id uuid pk
+•	tenant_id uuid not null
+•	label text not null
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, label)
+parcels
+•	id uuid pk
+•	tenant_id uuid not null
+•	cadastral_ref text not null
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, cadastral_ref)
+copro_addresses
+•	tenant_id uuid not null
+•	copro_id uuid not null FK → copros(id)
+•	address_id uuid not null FK → addresses(id)
+•	role text not null CHECK role IN ('main','secondary')
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, copro_id, address_id)
+copro_parcels
+•	tenant_id uuid not null
+•	copro_id uuid not null FK → copros(id)
+•	parcel_id uuid not null FK → parcels(id)
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, copro_id, parcel_id)
+________________________________________
+A2) Import jobs & logs
+import_jobs
+•	id uuid pk
+•	tenant_id uuid not null
+•	copro_id uuid not null FK → copros(id)
+•	status text not null CHECK status IN ('queued','running','completed','completed_with_review_required','failed')
+•	files jsonb not null
+•	stats jsonb null
+•	created_at timestamptz not null default now()
+•	started_at timestamptz null
+•	ended_at timestamptz null
+data_issues
+•	id uuid pk
+•	job_id uuid not null FK → import_jobs(id)
+•	tenant_id uuid not null
+•	severity text not null CHECK severity IN ('warning','error')
+•	code text not null
+•	entity_type text not null
+•	entity_key text null
+•	message text not null
+•	payload jsonb null
+•	created_at timestamptz not null default now()
+________________________________________
+A3) Contacts propriétaires (V1.5)
+contacts
+•	id uuid pk
+•	tenant_id uuid not null
+•	external_ref text not null (Référence)
+•	civility_raw text not null (Civilité)
+•	contact_category text not null CHECK IN ('physical','legal_entity','group')
+•	legal_form text null CHECK legal_form IS NULL OR legal_form IN ('STE','SCI','SDC')
+•	group_type text null CHECK group_type IS NULL OR group_type IN ('INDIV','CONSOR','SUCESS')
+•	first_name text null
+•	last_name_or_name text not null
+•	display_name text not null
+•	address_line1 text null
+•	address_line2 text null
+•	postcode text null
+•	city text null
+•	country text null
+•	email text null
+•	phone1 text null
+•	phone2 text null
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, external_ref)
+________________________________________
+A4) Lots (EDD)
+lots
+•	id uuid pk
+•	tenant_id uuid not null
+•	copro_id uuid not null FK → copros(id)
+•	lot_number text not null (NumLot)
+•	floor_label text not null (Etage)
+•	lot_type_label text not null (TypeLot)
+•	lot_family text not null CHECK IN ('MAIN_HABITATION','MAIN_COMMERCE','DEPENDANCE')
+•	surface_m2 numeric null (SurfaceLot)
+•	exteriors jsonb null (array)
+•	tantiemes_general_num int null
+•	tantiemes_general_den int null
+•	tantiemes_asc_num int null
+•	tantiemes_asc_den int null
+•	tantiemes_stairs_num int null
+•	tantiemes_stairs_den int null
+•	tantiemes_heat_num int null
+•	tantiemes_heat_den int null
+•	observations text null
+•	acquired_at date null
+•	source_job_id uuid null FK → import_jobs(id)
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, copro_id, lot_number)
+________________________________________
+A5) Units (biens) + liens
+units
+•	id uuid pk
+•	tenant_id uuid not null
+•	copro_id uuid not null FK → copros(id)
+•	unit_type text not null CHECK IN ('habitation','commercial','dependance')
+•	status text not null CHECK IN ('active')
+•	main_lot_number text null
+•	lots_count int not null default 0 (maintenu par trigger)
+•	source_owner_external_ref text null
+•	source_job_id uuid null FK → import_jobs(id)
+•	created_at timestamptz not null default now()
+unit_lots
+•	tenant_id uuid not null
+•	unit_id uuid not null FK → units(id) ON DELETE CASCADE
+•	lot_id uuid not null FK → lots(id)
+•	role text not null CHECK IN ('main','annex')
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, unit_id, lot_id)
+unit_owners
+•	tenant_id uuid not null
+•	unit_id uuid not null FK → units(id) ON DELETE CASCADE
+•	contact_id uuid not null FK → contacts(id)
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, unit_id, contact_id)
+unit_addresses
+•	tenant_id uuid not null
+•	unit_id uuid not null FK → units(id) ON DELETE CASCADE
+•	address_id uuid not null FK → addresses(id)
+•	role text not null CHECK IN ('main','secondary')
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, unit_id, address_id)
+unit_parcels
+•	tenant_id uuid not null
+•	unit_id uuid not null FK → units(id) ON DELETE CASCADE
+•	parcel_id uuid not null FK → parcels(id)
+•	created_at timestamptz not null default now()
+•	UNIQUE (tenant_id, unit_id, parcel_id)
+________________________________________
+A6) Reviews
+unit_build_reviews
+•	id uuid pk
+•	tenant_id uuid not null
+•	copro_id uuid not null FK → copros(id)
+•	job_id uuid not null FK → import_jobs(id)
+•	owner_ref text not null
+•	status text not null CHECK IN ('pending_review')
+•	reason text not null CHECK IN ('multiple_habitation_main_lots')
+•	lots_in_scope jsonb not null
+•	proposals jsonb not null
+•	created_at timestamptz not null default now()
+________________________________________
+B) Indexes attendus (en plus des PK et UNIQUE)
+copros
+•	INDEX (tenant_id)
+addresses
+•	INDEX (tenant_id)
+parcels
+•	INDEX (tenant_id)
+copro_addresses
+•	INDEX (copro_id)
+•	INDEX (address_id)
+•	INDEX (role)
+copro_parcels
+•	INDEX (copro_id)
+•	INDEX (parcel_id)
+import_jobs
+•	INDEX (tenant_id)
+•	INDEX (copro_id)
+•	INDEX (status)
+•	INDEX (created_at)
+data_issues
+•	INDEX (tenant_id)
+•	INDEX (job_id)
+•	INDEX (severity)
+•	INDEX (code)
+contacts
+•	INDEX (tenant_id)
+•	INDEX (contact_category)
+•	INDEX (legal_form)
+•	INDEX (group_type)
+lots
+•	INDEX (tenant_id)
+•	INDEX (copro_id)
+•	INDEX (lot_family)
+•	INDEX (lot_type_label)
+units
+•	INDEX (tenant_id)
+•	INDEX (copro_id)
+•	INDEX (unit_type)
+•	INDEX (status)
+•	INDEX (source_owner_external_ref)
+unit_lots
+•	INDEX (unit_id)
+•	INDEX (lot_id)
+•	INDEX (role)
+unit_owners
+•	INDEX (unit_id)
+•	INDEX (contact_id)
+unit_addresses
+•	INDEX (unit_id)
+•	INDEX (address_id)
+•	INDEX (role)
+unit_parcels
+•	INDEX (unit_id)
+•	INDEX (parcel_id)
+unit_build_reviews
+•	INDEX (tenant_id)
+•	INDEX (copro_id)
+•	INDEX (status)
+•	INDEX (owner_ref)
+________________________________________
+C) Trigger obligatoire : units.lots_count
+C1) Règle
+•	units.lots_count = COUNT(unit_lots) pour unit_id
+•	Trigger sur unit_lots : AFTER INSERT OR DELETE OR UPDATE
+•	Si UPDATE change unit_id → recalcul sur OLD.unit_id et NEW.unit_id
+•	Interdiction de calculer lots_count côté code Edge Function
+________________________________________
+D) Fichiers d’entrée — required headers & mapping
+D1) Fichier 1 : EDD VF (.xlsx)
+Required headers (FAIL si absent)
+•	NumLot
+•	Etage
+•	TypeLot
+Optional headers (utiliser si présent)
+•	SurfaceLot
+•	Exterieurs
+•	SurfaceExterieurs
+•	QuotesPartsGenerales
+•	Quotes-parts Ascenseurs
+•	Quotes-parts Escaliers
+•	Quotes-parts Chauffage
+•	Quotes-parts Bâtiments
+•	Observations
+•	DateArrivee
+•	Batiment
+•	Escalier (attention espace final)
+•	NbPieces
+•	NumPorte
+•	AnnexeLot
+•	Montant Fond travaux
+Mapping minimal EDD → lots
+•	lots.lot_number ← NumLot (string)
+•	lots.floor_label ← Etage (string)
+•	lots.lot_type_label ← TypeLot (string)
+•	lots.surface_m2 ← SurfaceLot (numeric nullable)
+•	lots.observations ← Observations (text nullable, brut)
+•	lots.acquired_at ← DateArrivee (date nullable)
+Parsing surfaces
+•	décimales 12.5 ou 12,5
+•	si invalide → issue warning edd_surface_lot_invalid
+Parsing exterieurs
+•	Exterieurs: split par , + trim
+•	si 1 extérieur → SurfaceExterieurs peut être décimal (, ou .)
+•	si plusieurs extérieurs → surfaces séparées par ", " (virgule + espace), ex "12, 116"
+•	mismatch compte types/surfaces → warning edd_exteriors_surface_count_mismatch
+•	stockage lots.exteriors = JSON array:
+[{"type":"Balcon","surface_m2":12.0}, ...]
+Parsing tantièmes
+Pour chaque colonne QuotesParts* :
+•	format 411 ou 411/10000
+•	stocker *_num / *_den
+•	si pas de dénominateur (cas 411) → warning tantieme_denominator_missing
+•	si format invalide → warning edd_tantieme_invalid_format
+DateArrivee
+•	si invalide → warning edd_date_arrivee_invalid
+________________________________________
+D2) Fichier 2 : lot_ref
+Required headers (FAIL si absent)
+•	Référence
+•	N° lot
+Mapping
+•	owner_ref = Référence
+•	lot_number = N° lot
+Règles
+•	lot absent dans EDD → warning owner_link_without_lot
+•	lot EDD sans owner_ref → warning missing_owner_link
+________________________________________
+D3) Fichier 3 : contacts propriétaires
+Required headers (FAIL si absent)
+•	Référence
+•	Civilité
+•	Nom
+(Prénom optionnel)
+Optional headers (si présents)
+•	Prénom
+•	Adresse 1, Adresse 2, Code postal, Ville, Pays
+•	e-mail
+•	Téléphone 1, Téléphone 2
+Mapping contacts → table contacts
+•	external_ref ← Référence
+•	civility_raw ← Civilité
+•	first_name ← Prénom (nullable)
+•	last_name_or_name ← Nom
+•	adresse & coordonnées selon colonnes
+Civilité → catégorie V1.5
+•	Monsieur/Madame/Monsieur ou Madame → physical
+•	STE/SCI/SDC → legal_entity + legal_form
+•	INDIV/CONSOR/SUCESS → group + group_type
+•	autre → warning contacts_unknown_civility_value + fallback physical
+Display_name
+•	physical : Prénom + Nom (si prénom absent → Nom)
+•	legal_entity/group : Nom
+Règle
+•	owner_ref dans lot_ref absent du fichier contacts → warning missing_contact_for_owner_ref
+________________________________________
+E) Codes logs (data_issues) — norme
+FAIL (job failed)
+•	edd_missing_required_column
+•	lot_ref_missing_required_column
+•	contacts_missing_required_column
+WARN (job continue)
+•	edd_surface_lot_invalid
+•	edd_exteriors_surface_count_mismatch
+•	tantieme_denominator_missing
+•	edd_tantieme_invalid_format
+•	edd_date_arrivee_invalid
+•	owner_link_without_lot
+•	missing_owner_link
+•	missing_contact_for_owner_ref
+•	unknown_lot_type_mapping
+•	contacts_unknown_civility_value
+
