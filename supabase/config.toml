@@ -1,0 +1,28 @@
+# Supabase Configuration for EDD API V1.5
+# Linked to project: xuvyupcdamdmmrtttjlo
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[functions]
+verify_jwt = true
+
+[functions.edd-import]
+verify_jwt = true

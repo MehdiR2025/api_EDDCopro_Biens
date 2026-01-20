@@ -1,0 +1,159 @@
+{
+  "info": {
+    "_postman_id": "edd-api-v1-5",
+    "name": "EDD API V1.5",
+    "description": "API EDD V1.5 - Import de lots et contacts pour copropriétés",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "POST /edd-import",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{SUPABASE_ANON_KEY}}"
+          },
+          {
+            "key": "apikey",
+            "value": "{{SUPABASE_ANON_KEY}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    },\n    {\n      \"label\": \"14 rue de la Paix, 75001 Paris\",\n      \"role\": \"secondary\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\n    \"75101000AB0001\",\n    \"75101000AB0002\"\n  ],\n  \"files\": {\n    \"edd_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/edd_vf.xlsx\",\n    \"lot_ref_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/contacts.xlsx\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+          "host": ["{{SUPABASE_URL}}"],
+          "path": ["functions", "v1", "edd-import"]
+        },
+        "description": "Import EDD: crée les lots, contacts et units à partir des 3 fichiers Excel"
+      },
+      "response": [
+        {
+          "name": "SUCCESS - No review required",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{SUPABASE_ANON_KEY}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": {\n    \"edd_path\": \"imports/tenant/edd.xlsx\",\n    \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/tenant/contacts.xlsx\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+              "host": ["{{SUPABASE_URL}}"],
+              "path": ["functions", "v1", "edd-import"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"job_id\": \"770e8400-e29b-41d4-a716-446655440002\",\n  \"status\": \"completed\",\n  \"stats\": {\n    \"lots_upserted\": 45,\n    \"contacts_upserted\": 28,\n    \"units_created\": 25,\n    \"unit_lots_created\": 52,\n    \"unit_owners_created\": 25,\n    \"reviews_created\": 0,\n    \"issues_warning\": 3,\n    \"issues_error\": 0\n  },\n  \"reviews\": [],\n  \"errors\": []\n}"
+        },
+        {
+          "name": "SUCCESS - Review required",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{SUPABASE_ANON_KEY}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": {\n    \"edd_path\": \"imports/tenant/edd.xlsx\",\n    \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/tenant/contacts.xlsx\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+              "host": ["{{SUPABASE_URL}}"],
+              "path": ["functions", "v1", "edd-import"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"job_id\": \"880e8400-e29b-41d4-a716-446655440003\",\n  \"status\": \"completed_with_review_required\",\n  \"stats\": {\n    \"lots_upserted\": 50,\n    \"contacts_upserted\": 30,\n    \"units_created\": 22,\n    \"unit_lots_created\": 45,\n    \"unit_owners_created\": 22,\n    \"reviews_created\": 2,\n    \"issues_warning\": 5,\n    \"issues_error\": 0\n  },\n  \"reviews\": [\n    {\n      \"review_id\": \"990e8400-e29b-41d4-a716-446655440004\",\n      \"owner_ref\": \"REF001\",\n      \"display_name\": \"Jean Dupont\",\n      \"contact_category\": \"physical\",\n      \"legal_form\": null,\n      \"group_type\": null,\n      \"main_hab_lots\": [\"101\", \"102\"],\n      \"dep_lots\": [\"C01\", \"P15\"],\n      \"reason\": \"multiple_habitation_main_lots\"\n    },\n    {\n      \"review_id\": \"aa0e8400-e29b-41d4-a716-446655440005\",\n      \"owner_ref\": \"REF015\",\n      \"display_name\": \"SCI Les Tilleuls\",\n      \"contact_category\": \"legal_entity\",\n      \"legal_form\": \"SCI\",\n      \"group_type\": null,\n      \"main_hab_lots\": [\"201\", \"205\", \"208\"],\n      \"dep_lots\": [\"C12\"],\n      \"reason\": \"multiple_habitation_main_lots\"\n    }\n  ],\n  \"errors\": []\n}"
+        },
+        {
+          "name": "FAILED - Missing required column",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{SUPABASE_ANON_KEY}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": {\n    \"edd_path\": \"imports/tenant/edd_invalid.xlsx\",\n    \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/tenant/contacts.xlsx\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+              "host": ["{{SUPABASE_URL}}"],
+              "path": ["functions", "v1", "edd-import"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"job_id\": \"bb0e8400-e29b-41d4-a716-446655440006\",\n  \"status\": \"failed\",\n  \"stats\": null,\n  \"reviews\": [],\n  \"errors\": [\n    {\n      \"code\": \"edd_missing_required_column\",\n      \"message\": \"Missing required column: NumLot\",\n      \"entity\": \"edd\",\n      \"column\": \"NumLot\"\n    },\n    {\n      \"code\": \"contacts_missing_required_column\",\n      \"message\": \"Missing required column: Civilité\",\n      \"entity\": \"contacts\",\n      \"column\": \"Civilité\"\n    }\n  ]\n}"
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "SUPABASE_URL",
+      "value": "https://your-project.supabase.co",
+      "type": "string"
+    },
+    {
+      "key": "SUPABASE_ANON_KEY",
+      "value": "your-anon-key",
+      "type": "string"
+    }
+  ]
+}
