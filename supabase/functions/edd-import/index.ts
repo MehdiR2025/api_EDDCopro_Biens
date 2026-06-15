@@ -12,15 +12,18 @@ import * as XLSX from "https://esm.sh/xlsx@0.18.5";
 // TYPES
 // ============================================================
 
+type ImportMode = "full" | "lots_only" | "contacts_only";
+
 interface RequestBody {
   tenant_id: string;
   copro_id: string;
-  copro_addresses: { label: string; role: "main" | "secondary" }[];
-  copro_cadastral_refs: string[];
+  import_mode?: ImportMode;
+  copro_addresses?: { label: string; role: "main" | "secondary" }[];
+  copro_cadastral_refs?: string[];
   files: {
-    edd_path: string;
-    lot_ref_path: string;
-    contacts_path: string;
+    edd_path?: string;
+    lot_ref_path?: string;
+    contacts_path?: string;
   };
 }
 
@@ -472,16 +475,37 @@ serve(async (req) => {
     // Parse request body
     const body: RequestBody = await req.json();
     const { tenant_id, copro_id, copro_addresses, copro_cadastral_refs, files } = body;
+    const importMode: ImportMode = body.import_mode ?? "full";
 
-    // Validate required fields
-    if (!tenant_id || !copro_id || !files?.edd_path || !files?.lot_ref_path || !files?.contacts_path) {
+    // Validate required fields based on import_mode
+    const missingFields: string[] = [];
+    if (!tenant_id) missingFields.push("tenant_id");
+    if (!copro_id) missingFields.push("copro_id");
+
+    if (importMode === "full" || importMode === "lots_only") {
+      if (!files?.edd_path) missingFields.push("files.edd_path");
+    }
+    if (importMode === "full") {
+      if (!files?.lot_ref_path) missingFields.push("files.lot_ref_path");
+      if (!files?.contacts_path) missingFields.push("files.contacts_path");
+      if (!copro_addresses?.length) missingFields.push("copro_addresses");
+    }
+    if (importMode === "contacts_only") {
+      if (!files?.contacts_path) missingFields.push("files.contacts_path");
+    }
+
+    if (missingFields.length > 0) {
       return new Response(
         JSON.stringify({
           job_id: null,
           status: "failed",
           stats: null,
           reviews: [],
-          errors: [{ code: "invalid_request", message: "Missing required fields", entity: "request" }],
+          errors: [{
+            code: "invalid_request",
+            message: `Missing required fields: ${missingFields.join(", ")}`,
+            entity: "request",
+          }],
         } as ApiResponse),
         { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
       );
@@ -493,6 +517,7 @@ serve(async (req) => {
       .insert({
         tenant_id,
         copro_id,
+        mode: importMode,
         status: "running",
         files: files,
         started_at: new Date().toISOString(),
@@ -507,567 +532,568 @@ serve(async (req) => {
     jobId = jobData.id;
 
     // ============================================================
-    // DOWNLOAD AND PARSE FILES
-    // ============================================================
-
-    // Download EDD file
-    const { data: eddFileData, error: eddFileError } = await supabase.storage
-      .from("imports")
-      .download(files.edd_path);
-    if (eddFileError || !eddFileData) {
-      throw new Error(`Failed to download EDD file: ${eddFileError?.message}`);
-    }
-
-    // Download lot_ref file
-    const { data: lotRefFileData, error: lotRefFileError } = await supabase.storage
-      .from("imports")
-      .download(files.lot_ref_path);
-    if (lotRefFileError || !lotRefFileData) {
-      throw new Error(`Failed to download lot_ref file: ${lotRefFileError?.message}`);
-    }
-
-    // Download contacts file
-    const { data: contactsFileData, error: contactsFileError } = await supabase.storage
-      .from("imports")
-      .download(files.contacts_path);
-    if (contactsFileError || !contactsFileData) {
-      throw new Error(`Failed to download contacts file: ${contactsFileError?.message}`);
-    }
-
-    // Parse Excel files
-    const eddWorkbook = XLSX.read(await eddFileData.arrayBuffer(), { type: "array" });
-    const eddSheet = eddWorkbook.Sheets[eddWorkbook.SheetNames[0]];
-    const eddRows: EddRow[] = XLSX.utils.sheet_to_json(eddSheet, { defval: "" });
-    const eddHeaders = eddRows.length > 0 ? Object.keys(eddRows[0]) : [];
-
-    const lotRefWorkbook = XLSX.read(await lotRefFileData.arrayBuffer(), { type: "array" });
-    const lotRefSheet = lotRefWorkbook.Sheets[lotRefWorkbook.SheetNames[0]];
-    const lotRefRows: LotRefRow[] = XLSX.utils.sheet_to_json(lotRefSheet, { defval: "" });
-    const lotRefHeaders = lotRefRows.length > 0 ? Object.keys(lotRefRows[0]) : [];
-
-    const contactsWorkbook = XLSX.read(await contactsFileData.arrayBuffer(), { type: "array" });
-    const contactsSheet = contactsWorkbook.Sheets[contactsWorkbook.SheetNames[0]];
-    const contactsRows: ContactRow[] = XLSX.utils.sheet_to_json(contactsSheet, { defval: "" });
-    const contactsHeaders = contactsRows.length > 0 ? Object.keys(contactsRows[0]) : [];
-
-    // ============================================================
-    // VALIDATE REQUIRED HEADERS
-    // ============================================================
-
-    const eddRequiredHeaders = ["NumLot", "Etage", "TypeLot"];
-    const lotRefRequiredHeaders = ["Référence", "N° lot"];
-    const contactsRequiredHeaders = ["Référence", "Civilité", "Nom"];
-
-    let hasFatalError = false;
-
-    // Check EDD headers
-    for (const header of eddRequiredHeaders) {
-      if (!eddHeaders.includes(header)) {
-        issues.push({
-          severity: "error",
-          code: "edd_missing_required_column",
-          entity_type: "edd",
-          entity_key: null,
-          message: `Missing required column: ${header}`,
-          payload: { column: header },
-        });
-        errorResponses.push({
-          code: "edd_missing_required_column",
-          message: `Missing required column: ${header}`,
-          entity: "edd",
-          column: header,
-        });
-        hasFatalError = true;
-      }
-    }
-
-    // Check lot_ref headers
-    for (const header of lotRefRequiredHeaders) {
-      if (!lotRefHeaders.includes(header)) {
-        issues.push({
-          severity: "error",
-          code: "lot_ref_missing_required_column",
-          entity_type: "lot_ref",
-          entity_key: null,
-          message: `Missing required column: ${header}`,
-          payload: { column: header },
-        });
-        errorResponses.push({
-          code: "lot_ref_missing_required_column",
-          message: `Missing required column: ${header}`,
-          entity: "lot_ref",
-          column: header,
-        });
-        hasFatalError = true;
-      }
-    }
-
-    // Check contacts headers
-    for (const header of contactsRequiredHeaders) {
-      if (!contactsHeaders.includes(header)) {
-        issues.push({
-          severity: "error",
-          code: "contacts_missing_required_column",
-          entity_type: "contacts",
-          entity_key: null,
-          message: `Missing required column: ${header}`,
-          payload: { column: header },
-        });
-        errorResponses.push({
-          code: "contacts_missing_required_column",
-          message: `Missing required column: ${header}`,
-          entity: "contacts",
-          column: header,
-        });
-        hasFatalError = true;
-      }
-    }
-
-    // If fatal error, save issues and return failed
-    if (hasFatalError) {
-      // Save issues to database
-      if (issues.length > 0) {
-        await supabase.from("data_issues").insert(
-          issues.map((issue) => ({
-            job_id: jobId,
-            tenant_id,
-            ...issue,
-          }))
-        );
-      }
-
-      // Update job status to failed
-      await supabase
-        .from("import_jobs")
-        .update({
-          status: "failed",
-          ended_at: new Date().toISOString(),
-        })
-        .eq("id", jobId);
-
-      return new Response(
-        JSON.stringify({
-          job_id: jobId,
-          status: "failed",
-          stats: null,
-          reviews: [],
-          errors: errorResponses,
-        } as ApiResponse),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
-      );
-    }
-
-    // ============================================================
-    // PROCESS ADDRESSES AND PARCELS
+    // PHASE 1: ADDRESSES AND PARCELS (full mode only)
     // ============================================================
 
     const addressIdMap = new Map<string, string>();
     let mainAddressId: string | null = null;
+    const parcelIds: string[] = [];
 
-    // Upsert addresses
-    for (const addr of copro_addresses) {
-      const { data: addrData, error: addrError } = await supabase
-        .from("addresses")
-        .upsert(
-          { tenant_id, label: addr.label },
-          { onConflict: "tenant_id,label", ignoreDuplicates: false }
-        )
-        .select("id")
-        .single();
-
-      if (addrError || !addrData) {
-        // Try to get existing
-        const { data: existingAddr } = await supabase
+    if (importMode === "full") {
+      // Upsert addresses
+      for (const addr of copro_addresses!) {
+        const { data: addrData, error: addrError } = await supabase
           .from("addresses")
+          .upsert(
+            { tenant_id, label: addr.label },
+            { onConflict: "tenant_id,label", ignoreDuplicates: false }
+          )
           .select("id")
-          .eq("tenant_id", tenant_id)
-          .eq("label", addr.label)
           .single();
 
-        if (existingAddr) {
-          addressIdMap.set(addr.label, existingAddr.id);
-          if (addr.role === "main") mainAddressId = existingAddr.id;
-        }
-      } else {
-        addressIdMap.set(addr.label, addrData.id);
-        if (addr.role === "main") mainAddressId = addrData.id;
-      }
-    }
+        if (addrError || !addrData) {
+          // Try to get existing
+          const { data: existingAddr } = await supabase
+            .from("addresses")
+            .select("id")
+            .eq("tenant_id", tenant_id)
+            .eq("label", addr.label)
+            .single();
 
-    // Link copro to addresses
-    for (const addr of copro_addresses) {
-      const addressId = addressIdMap.get(addr.label);
-      if (addressId) {
-        await supabase
-          .from("copro_addresses")
+          if (existingAddr) {
+            addressIdMap.set(addr.label, existingAddr.id);
+            if (addr.role === "main") mainAddressId = existingAddr.id;
+          }
+        } else {
+          addressIdMap.set(addr.label, addrData.id);
+          if (addr.role === "main") mainAddressId = addrData.id;
+        }
+      }
+
+      // Link copro to addresses
+      for (const addr of copro_addresses!) {
+        const addressId = addressIdMap.get(addr.label);
+        if (addressId) {
+          await supabase
+            .from("copro_addresses")
+            .upsert(
+              { tenant_id, copro_id, address_id: addressId, role: addr.role },
+              { onConflict: "tenant_id,copro_id,address_id", ignoreDuplicates: true }
+            );
+        }
+      }
+
+      // Upsert parcels
+      for (const ref of copro_cadastral_refs ?? []) {
+        const { data: parcelData, error: parcelError } = await supabase
+          .from("parcels")
           .upsert(
-            { tenant_id, copro_id, address_id: addressId, role: addr.role },
-            { onConflict: "tenant_id,copro_id,address_id", ignoreDuplicates: true }
+            { tenant_id, cadastral_ref: ref },
+            { onConflict: "tenant_id,cadastral_ref", ignoreDuplicates: false }
+          )
+          .select("id")
+          .single();
+
+        if (parcelError || !parcelData) {
+          // Try to get existing
+          const { data: existingParcel } = await supabase
+            .from("parcels")
+            .select("id")
+            .eq("tenant_id", tenant_id)
+            .eq("cadastral_ref", ref)
+            .single();
+
+          if (existingParcel) {
+            parcelIds.push(existingParcel.id);
+          }
+        } else {
+          parcelIds.push(parcelData.id);
+        }
+      }
+
+      // Link copro to parcels
+      for (const parcelId of parcelIds) {
+        await supabase
+          .from("copro_parcels")
+          .upsert(
+            { tenant_id, copro_id, parcel_id: parcelId },
+            { onConflict: "tenant_id,copro_id,parcel_id", ignoreDuplicates: true }
           );
       }
     }
 
-    // Upsert parcels
-    const parcelIds: string[] = [];
-    for (const ref of copro_cadastral_refs) {
-      const { data: parcelData, error: parcelError } = await supabase
-        .from("parcels")
-        .upsert(
-          { tenant_id, cadastral_ref: ref },
-          { onConflict: "tenant_id,cadastral_ref", ignoreDuplicates: false }
-        )
-        .select("id")
-        .single();
-
-      if (parcelError || !parcelData) {
-        // Try to get existing
-        const { data: existingParcel } = await supabase
-          .from("parcels")
-          .select("id")
-          .eq("tenant_id", tenant_id)
-          .eq("cadastral_ref", ref)
-          .single();
-
-        if (existingParcel) {
-          parcelIds.push(existingParcel.id);
-        }
-      } else {
-        parcelIds.push(parcelData.id);
-      }
-    }
-
-    // Link copro to parcels
-    for (const parcelId of parcelIds) {
-      await supabase
-        .from("copro_parcels")
-        .upsert(
-          { tenant_id, copro_id, parcel_id: parcelId },
-          { onConflict: "tenant_id,copro_id,parcel_id", ignoreDuplicates: true }
-        );
-    }
-
     // ============================================================
-    // PARSE AND UPSERT LOTS
+    // PHASE 2: PARSE AND UPSERT LOTS (full and lots_only)
     // ============================================================
 
     const lotsMap = new Map<string, ParsedLot>();
     const lotIdMap = new Map<string, string>();
-
-    for (const row of eddRows) {
-      const lotNumber = toStr(row.NumLot);
-      if (!lotNumber) continue;
-
-      const floorLabel = toStr(row.Etage) || "";
-      const typeLot = toStr(row.TypeLot) || "";
-
-      const lotFamily = getLotFamily(typeLot, issues, lotNumber);
-
-      // Parse surface
-      let surfaceM2: number | null = null;
-      const rawSurface = toStr(row.SurfaceLot);
-      if (rawSurface) {
-        surfaceM2 = parseNumeric(rawSurface);
-        if (surfaceM2 === null) {
-          issues.push({
-            severity: "warning",
-            code: "edd_surface_lot_invalid",
-            entity_type: "lot",
-            entity_key: lotNumber,
-            message: `Invalid SurfaceLot value: "${rawSurface}"`,
-            payload: { value: rawSurface },
-          });
-        }
-      }
-
-      // Parse exteriors
-      const exteriors = parseExteriors(
-        toStr(row.Exterieurs),
-        toStr(row.SurfaceExterieurs),
-        issues,
-        lotNumber
-      );
-
-      // Parse tantiemes
-      const tantGen = parseTantieme(toStr(row.QuotesPartsGenerales), "QuotesPartsGenerales", issues, lotNumber);
-      const tantAsc = parseTantieme(toStr(row["Quotes-parts Ascenseurs"]), "Quotes-parts Ascenseurs", issues, lotNumber);
-      const tantStairs = parseTantieme(toStr(row["Quotes-parts Escaliers"]), "Quotes-parts Escaliers", issues, lotNumber);
-      const tantHeat = parseTantieme(toStr(row["Quotes-parts Chauffage"]), "Quotes-parts Chauffage", issues, lotNumber);
-
-      // Parse date
-      let acquiredAt: string | null = null;
-      const rawDate = toStr(row.DateArrivee);
-      if (rawDate) {
-        acquiredAt = parseDate(rawDate);
-        if (acquiredAt === null) {
-          issues.push({
-            severity: "warning",
-            code: "edd_date_arrivee_invalid",
-            entity_type: "lot",
-            entity_key: lotNumber,
-            message: `Invalid DateArrivee value: "${rawDate}"`,
-            payload: { value: rawDate },
-          });
-        }
-      }
-
-      // Parse works fund amount
-      let worksFundAmount: number | null = null;
-      const rawWorksFund = toStr(row["Montant Fond travaux"]);
-      if (rawWorksFund) {
-        worksFundAmount = parseNumeric(rawWorksFund);
-      }
-
-      const parsedLot: ParsedLot = {
-        lot_number: lotNumber,
-        floor_label: floorLabel,
-        lot_type_label: typeLot,
-        lot_family: lotFamily,
-        surface_m2: surfaceM2,
-        exteriors,
-        tantiemes_general_num: tantGen.num,
-        tantiemes_general_den: tantGen.den,
-        tantiemes_asc_num: tantAsc.num,
-        tantiemes_asc_den: tantAsc.den,
-        tantiemes_stairs_num: tantStairs.num,
-        tantiemes_stairs_den: tantStairs.den,
-        tantiemes_heat_num: tantHeat.num,
-        tantiemes_heat_den: tantHeat.den,
-        observations: toStr(row.Observations),
-        acquired_at: acquiredAt,
-        building: toStr(row.Batiment),
-        staircase: toStr(row["Escalier "]),
-        nb_rooms: toStr(row.NbPieces),
-        door_number: toStr(row.NumPorte),
-        annex_lot: toStr(row.AnnexeLot),
-        works_fund_amount: worksFundAmount,
-      };
-
-      lotsMap.set(lotNumber, parsedLot);
-    }
-
-    // Upsert lots to database
     let lotsUpserted = 0;
-    for (const [lotNumber, lot] of lotsMap) {
-      const { data: lotData, error: lotError } = await supabase
-        .from("lots")
-        .upsert(
-          {
-            tenant_id,
-            copro_id,
-            lot_number: lot.lot_number,
-            floor_label: lot.floor_label,
-            lot_type_label: lot.lot_type_label,
-            lot_family: lot.lot_family,
-            surface_m2: lot.surface_m2,
-            exteriors: lot.exteriors,
-            tantiemes_general_num: lot.tantiemes_general_num,
-            tantiemes_general_den: lot.tantiemes_general_den,
-            tantiemes_asc_num: lot.tantiemes_asc_num,
-            tantiemes_asc_den: lot.tantiemes_asc_den,
-            tantiemes_stairs_num: lot.tantiemes_stairs_num,
-            tantiemes_stairs_den: lot.tantiemes_stairs_den,
-            tantiemes_heat_num: lot.tantiemes_heat_num,
-            tantiemes_heat_den: lot.tantiemes_heat_den,
-            observations: lot.observations,
-            acquired_at: lot.acquired_at,
-            building: lot.building,
-            staircase: lot.staircase,
-            nb_rooms: lot.nb_rooms,
-            door_number: lot.door_number,
-            annex_lot: lot.annex_lot,
-            works_fund_amount: lot.works_fund_amount,
-            source_job_id: jobId,
-          },
-          { onConflict: "tenant_id,copro_id,lot_number", ignoreDuplicates: false }
-        )
-        .select("id")
-        .single();
 
-      if (!lotError && lotData) {
-        lotIdMap.set(lotNumber, lotData.id);
-        lotsUpserted++;
-      } else {
-        // Try to get existing
-        const { data: existingLot } = await supabase
+    if (importMode === "full" || importMode === "lots_only") {
+      // Download EDD file
+      const { data: eddFileData, error: eddFileError } = await supabase.storage
+        .from("imports")
+        .download(files.edd_path!);
+      if (eddFileError || !eddFileData) {
+        throw new Error(`Failed to download EDD file: ${eddFileError?.message}`);
+      }
+
+      // Parse Excel file
+      const eddWorkbook = XLSX.read(await eddFileData.arrayBuffer(), { type: "array" });
+      const eddSheet = eddWorkbook.Sheets[eddWorkbook.SheetNames[0]];
+      const eddRows: EddRow[] = XLSX.utils.sheet_to_json(eddSheet, { defval: "" });
+      const eddHeaders = eddRows.length > 0 ? Object.keys(eddRows[0]) : [];
+
+      // Validate required headers
+      const eddRequiredHeaders = ["NumLot", "Etage", "TypeLot"];
+      let hasFatalError = false;
+
+      for (const header of eddRequiredHeaders) {
+        if (!eddHeaders.includes(header)) {
+          issues.push({
+            severity: "error",
+            code: "edd_missing_required_column",
+            entity_type: "edd",
+            entity_key: null,
+            message: `Missing required column: ${header}`,
+            payload: { column: header },
+          });
+          errorResponses.push({
+            code: "edd_missing_required_column",
+            message: `Missing required column: ${header}`,
+            entity: "edd",
+            column: header,
+          });
+          hasFatalError = true;
+        }
+      }
+
+      if (hasFatalError) {
+        if (issues.length > 0) {
+          await supabase.from("data_issues").insert(
+            issues.map((issue) => ({ job_id: jobId, tenant_id, ...issue }))
+          );
+        }
+        await supabase
+          .from("import_jobs")
+          .update({ status: "failed", ended_at: new Date().toISOString() })
+          .eq("id", jobId);
+
+        return new Response(
+          JSON.stringify({ job_id: jobId, status: "failed", stats: null, reviews: [], errors: errorResponses } as ApiResponse),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      // Parse rows
+      for (const row of eddRows) {
+        const lotNumber = toStr(row.NumLot);
+        if (!lotNumber) continue;
+
+        const floorLabel = toStr(row.Etage) || "";
+        const typeLot = toStr(row.TypeLot) || "";
+        const lotFamily = getLotFamily(typeLot, issues, lotNumber);
+
+        let surfaceM2: number | null = null;
+        const rawSurface = toStr(row.SurfaceLot);
+        if (rawSurface) {
+          surfaceM2 = parseNumeric(rawSurface);
+          if (surfaceM2 === null) {
+            issues.push({
+              severity: "warning",
+              code: "edd_surface_lot_invalid",
+              entity_type: "lot",
+              entity_key: lotNumber,
+              message: `Invalid SurfaceLot value: "${rawSurface}"`,
+              payload: { value: rawSurface },
+            });
+          }
+        }
+
+        const exteriors = parseExteriors(toStr(row.Exterieurs), toStr(row.SurfaceExterieurs), issues, lotNumber);
+        const tantGen = parseTantieme(toStr(row.QuotesPartsGenerales), "QuotesPartsGenerales", issues, lotNumber);
+        const tantAsc = parseTantieme(toStr(row["Quotes-parts Ascenseurs"]), "Quotes-parts Ascenseurs", issues, lotNumber);
+        const tantStairs = parseTantieme(toStr(row["Quotes-parts Escaliers"]), "Quotes-parts Escaliers", issues, lotNumber);
+        const tantHeat = parseTantieme(toStr(row["Quotes-parts Chauffage"]), "Quotes-parts Chauffage", issues, lotNumber);
+
+        let acquiredAt: string | null = null;
+        const rawDate = toStr(row.DateArrivee);
+        if (rawDate) {
+          acquiredAt = parseDate(rawDate);
+          if (acquiredAt === null) {
+            issues.push({
+              severity: "warning",
+              code: "edd_date_arrivee_invalid",
+              entity_type: "lot",
+              entity_key: lotNumber,
+              message: `Invalid DateArrivee value: "${rawDate}"`,
+              payload: { value: rawDate },
+            });
+          }
+        }
+
+        let worksFundAmount: number | null = null;
+        const rawWorksFund = toStr(row["Montant Fond travaux"]);
+        if (rawWorksFund) {
+          worksFundAmount = parseNumeric(rawWorksFund);
+        }
+
+        lotsMap.set(lotNumber, {
+          lot_number: lotNumber,
+          floor_label: floorLabel,
+          lot_type_label: typeLot,
+          lot_family: lotFamily,
+          surface_m2: surfaceM2,
+          exteriors,
+          tantiemes_general_num: tantGen.num,
+          tantiemes_general_den: tantGen.den,
+          tantiemes_asc_num: tantAsc.num,
+          tantiemes_asc_den: tantAsc.den,
+          tantiemes_stairs_num: tantStairs.num,
+          tantiemes_stairs_den: tantStairs.den,
+          tantiemes_heat_num: tantHeat.num,
+          tantiemes_heat_den: tantHeat.den,
+          observations: toStr(row.Observations),
+          acquired_at: acquiredAt,
+          building: toStr(row.Batiment),
+          staircase: toStr(row["Escalier "]),
+          nb_rooms: toStr(row.NbPieces),
+          door_number: toStr(row.NumPorte),
+          annex_lot: toStr(row.AnnexeLot),
+          works_fund_amount: worksFundAmount,
+        });
+      }
+
+      // Upsert lots to database
+      for (const [lotNumber, lot] of lotsMap) {
+        const { data: lotData, error: lotError } = await supabase
           .from("lots")
+          .upsert(
+            {
+              tenant_id,
+              copro_id,
+              lot_number: lot.lot_number,
+              floor_label: lot.floor_label,
+              lot_type_label: lot.lot_type_label,
+              lot_family: lot.lot_family,
+              surface_m2: lot.surface_m2,
+              exteriors: lot.exteriors,
+              tantiemes_general_num: lot.tantiemes_general_num,
+              tantiemes_general_den: lot.tantiemes_general_den,
+              tantiemes_asc_num: lot.tantiemes_asc_num,
+              tantiemes_asc_den: lot.tantiemes_asc_den,
+              tantiemes_stairs_num: lot.tantiemes_stairs_num,
+              tantiemes_stairs_den: lot.tantiemes_stairs_den,
+              tantiemes_heat_num: lot.tantiemes_heat_num,
+              tantiemes_heat_den: lot.tantiemes_heat_den,
+              observations: lot.observations,
+              acquired_at: lot.acquired_at,
+              building: lot.building,
+              staircase: lot.staircase,
+              nb_rooms: lot.nb_rooms,
+              door_number: lot.door_number,
+              annex_lot: lot.annex_lot,
+              works_fund_amount: lot.works_fund_amount,
+              source_job_id: jobId,
+            },
+            { onConflict: "tenant_id,copro_id,lot_number", ignoreDuplicates: false }
+          )
           .select("id")
-          .eq("tenant_id", tenant_id)
-          .eq("copro_id", copro_id)
-          .eq("lot_number", lotNumber)
           .single();
 
-        if (existingLot) {
-          lotIdMap.set(lotNumber, existingLot.id);
+        if (!lotError && lotData) {
+          lotIdMap.set(lotNumber, lotData.id);
           lotsUpserted++;
+        } else {
+          const { data: existingLot } = await supabase
+            .from("lots")
+            .select("id")
+            .eq("tenant_id", tenant_id)
+            .eq("copro_id", copro_id)
+            .eq("lot_number", lotNumber)
+            .single();
+
+          if (existingLot) {
+            lotIdMap.set(lotNumber, existingLot.id);
+            lotsUpserted++;
+          }
         }
       }
     }
 
     // ============================================================
-    // PARSE LOT_REF (OWNER_REF -> LOTS)
+    // PHASE 3: LOT_REF — owner->lots mapping (full mode only)
     // ============================================================
 
     const ownerToLots = new Map<string, string[]>();
     const lotsWithOwner = new Set<string>();
 
-    for (const row of lotRefRows) {
-      const ownerRef = toStr(row["Référence"]);
-      const lotNumber = toStr(row["N° lot"]);
-
-      if (!ownerRef || !lotNumber) continue;
-
-      // Check if lot exists in EDD
-      if (!lotsMap.has(lotNumber)) {
-        issues.push({
-          severity: "warning",
-          code: "owner_link_without_lot",
-          entity_type: "lot_ref",
-          entity_key: lotNumber,
-          message: `Lot "${lotNumber}" referenced in lot_ref but not found in EDD`,
-          payload: { owner_ref: ownerRef, lot_number: lotNumber },
-        });
-        continue;
+    if (importMode === "full") {
+      // Download lot_ref file
+      const { data: lotRefFileData, error: lotRefFileError } = await supabase.storage
+        .from("imports")
+        .download(files.lot_ref_path!);
+      if (lotRefFileError || !lotRefFileData) {
+        throw new Error(`Failed to download lot_ref file: ${lotRefFileError?.message}`);
       }
 
-      lotsWithOwner.add(lotNumber);
+      const lotRefWorkbook = XLSX.read(await lotRefFileData.arrayBuffer(), { type: "array" });
+      const lotRefSheet = lotRefWorkbook.Sheets[lotRefWorkbook.SheetNames[0]];
+      const lotRefRows: LotRefRow[] = XLSX.utils.sheet_to_json(lotRefSheet, { defval: "" });
+      const lotRefHeaders = lotRefRows.length > 0 ? Object.keys(lotRefRows[0]) : [];
 
-      if (!ownerToLots.has(ownerRef)) {
-        ownerToLots.set(ownerRef, []);
-      }
-      ownerToLots.get(ownerRef)!.push(lotNumber);
-    }
-
-    // Check for lots without owner
-    for (const lotNumber of lotsMap.keys()) {
-      if (!lotsWithOwner.has(lotNumber)) {
-        issues.push({
-          severity: "warning",
-          code: "missing_owner_link",
-          entity_type: "lot",
-          entity_key: lotNumber,
-          message: `Lot "${lotNumber}" has no owner reference in lot_ref`,
-          payload: { lot_number: lotNumber },
-        });
-      }
-    }
-
-    // ============================================================
-    // PARSE AND UPSERT CONTACTS
-    // ============================================================
-
-    const contactsMap = new Map<string, ParsedContact>();
-    const contactIdMap = new Map<string, string>();
-
-    for (const row of contactsRows) {
-      const externalRef = toStr(row["Référence"]);
-      const civilityRaw = toStr(row["Civilité"]) || "";
-      const nom = toStr(row["Nom"]);
-
-      if (!externalRef || !nom) continue;
-
-      const civilityInfo = getCivilityInfo(civilityRaw);
-
-      if (civilityInfo.isUnknown) {
-        issues.push({
-          severity: "warning",
-          code: "contacts_unknown_civility_value",
-          entity_type: "contact",
-          entity_key: externalRef,
-          message: `Unknown civility value: "${civilityRaw}", defaulting to physical`,
-          payload: { civility: civilityRaw },
-        });
+      // Validate required headers
+      const lotRefRequiredHeaders = ["Référence", "N° lot"];
+      let hasFatalError = false;
+      for (const header of lotRefRequiredHeaders) {
+        if (!lotRefHeaders.includes(header)) {
+          issues.push({
+            severity: "error",
+            code: "lot_ref_missing_required_column",
+            entity_type: "lot_ref",
+            entity_key: null,
+            message: `Missing required column: ${header}`,
+            payload: { column: header },
+          });
+          errorResponses.push({
+            code: "lot_ref_missing_required_column",
+            message: `Missing required column: ${header}`,
+            entity: "lot_ref",
+            column: header,
+          });
+          hasFatalError = true;
+        }
       }
 
-      const firstName = toStr(row["Prénom"]);
-      const displayName = getDisplayName(civilityInfo.contact_category, firstName, nom);
+      if (hasFatalError) {
+        if (issues.length > 0) {
+          await supabase.from("data_issues").insert(
+            issues.map((issue) => ({ job_id: jobId, tenant_id, ...issue }))
+          );
+        }
+        await supabase
+          .from("import_jobs")
+          .update({ status: "failed", ended_at: new Date().toISOString() })
+          .eq("id", jobId);
 
-      const parsedContact: ParsedContact = {
-        external_ref: externalRef,
-        civility_raw: civilityRaw,
-        contact_category: civilityInfo.contact_category,
-        legal_form: civilityInfo.legal_form,
-        group_type: civilityInfo.group_type,
-        first_name: firstName,
-        last_name_or_name: nom,
-        display_name: displayName,
-        address_line1: toStr(row["Adresse 1"]),
-        address_line2: toStr(row["Adresse 2"]),
-        postcode: toStr(row["Code postal"]),
-        city: toStr(row["Ville"]),
-        country: toStr(row["Pays"]),
-        email: toStr(row["e-mail"]),
-        phone1: toStr(row["Téléphone 1"]),
-        phone2: toStr(row["Téléphone 2"]),
-      };
-
-      contactsMap.set(externalRef, parsedContact);
-    }
-
-    // Check for missing contacts for owner_refs
-    for (const ownerRef of ownerToLots.keys()) {
-      if (!contactsMap.has(ownerRef)) {
-        issues.push({
-          severity: "warning",
-          code: "missing_contact_for_owner_ref",
-          entity_type: "contact",
-          entity_key: ownerRef,
-          message: `Owner reference "${ownerRef}" from lot_ref has no matching contact`,
-          payload: { owner_ref: ownerRef },
-        });
+        return new Response(
+          JSON.stringify({ job_id: jobId, status: "failed", stats: null, reviews: [], errors: errorResponses } as ApiResponse),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
       }
-    }
 
-    // Upsert contacts to database
-    let contactsUpserted = 0;
-    for (const [ref, contact] of contactsMap) {
-      const { data: contactData, error: contactError } = await supabase
-        .from("contacts")
-        .upsert(
-          {
-            tenant_id,
-            external_ref: contact.external_ref,
-            civility_raw: contact.civility_raw,
-            contact_category: contact.contact_category,
-            legal_form: contact.legal_form,
-            group_type: contact.group_type,
-            first_name: contact.first_name,
-            last_name_or_name: contact.last_name_or_name,
-            display_name: contact.display_name,
-            address_line1: contact.address_line1,
-            address_line2: contact.address_line2,
-            postcode: contact.postcode,
-            city: contact.city,
-            country: contact.country,
-            email: contact.email,
-            phone1: contact.phone1,
-            phone2: contact.phone2,
-          },
-          { onConflict: "tenant_id,external_ref", ignoreDuplicates: false }
-        )
-        .select("id")
-        .single();
+      for (const row of lotRefRows) {
+        const ownerRef = toStr(row["Référence"]);
+        const lotNumber = toStr(row["N° lot"]);
 
-      if (!contactError && contactData) {
-        contactIdMap.set(ref, contactData.id);
-        contactsUpserted++;
-      } else {
-        // Try to get existing
-        const { data: existingContact } = await supabase
-          .from("contacts")
-          .select("id")
-          .eq("tenant_id", tenant_id)
-          .eq("external_ref", ref)
-          .single();
+        if (!ownerRef || !lotNumber) continue;
 
-        if (existingContact) {
-          contactIdMap.set(ref, existingContact.id);
-          contactsUpserted++;
+        if (!lotsMap.has(lotNumber)) {
+          issues.push({
+            severity: "warning",
+            code: "owner_link_without_lot",
+            entity_type: "lot_ref",
+            entity_key: lotNumber,
+            message: `Lot "${lotNumber}" referenced in lot_ref but not found in EDD`,
+            payload: { owner_ref: ownerRef, lot_number: lotNumber },
+          });
+          continue;
+        }
+
+        lotsWithOwner.add(lotNumber);
+
+        if (!ownerToLots.has(ownerRef)) {
+          ownerToLots.set(ownerRef, []);
+        }
+        ownerToLots.get(ownerRef)!.push(lotNumber);
+      }
+
+      for (const lotNumber of lotsMap.keys()) {
+        if (!lotsWithOwner.has(lotNumber)) {
+          issues.push({
+            severity: "warning",
+            code: "missing_owner_link",
+            entity_type: "lot",
+            entity_key: lotNumber,
+            message: `Lot "${lotNumber}" has no owner reference in lot_ref`,
+            payload: { lot_number: lotNumber },
+          });
         }
       }
     }
 
     // ============================================================
-    // BUILD UNITS
+    // PHASE 4: PARSE AND UPSERT CONTACTS (full and contacts_only)
+    // ============================================================
+
+    const contactsMap = new Map<string, ParsedContact>();
+    const contactIdMap = new Map<string, string>();
+    let contactsUpserted = 0;
+
+    if (importMode === "full" || importMode === "contacts_only") {
+      // Download contacts file
+      const { data: contactsFileData, error: contactsFileError } = await supabase.storage
+        .from("imports")
+        .download(files.contacts_path!);
+      if (contactsFileError || !contactsFileData) {
+        throw new Error(`Failed to download contacts file: ${contactsFileError?.message}`);
+      }
+
+      const contactsWorkbook = XLSX.read(await contactsFileData.arrayBuffer(), { type: "array" });
+      const contactsSheet = contactsWorkbook.Sheets[contactsWorkbook.SheetNames[0]];
+      const contactsRows: ContactRow[] = XLSX.utils.sheet_to_json(contactsSheet, { defval: "" });
+      const contactsHeaders = contactsRows.length > 0 ? Object.keys(contactsRows[0]) : [];
+
+      // Validate required headers
+      const contactsRequiredHeaders = ["Référence", "Civilité", "Nom"];
+      let hasFatalError = false;
+      for (const header of contactsRequiredHeaders) {
+        if (!contactsHeaders.includes(header)) {
+          issues.push({
+            severity: "error",
+            code: "contacts_missing_required_column",
+            entity_type: "contacts",
+            entity_key: null,
+            message: `Missing required column: ${header}`,
+            payload: { column: header },
+          });
+          errorResponses.push({
+            code: "contacts_missing_required_column",
+            message: `Missing required column: ${header}`,
+            entity: "contacts",
+            column: header,
+          });
+          hasFatalError = true;
+        }
+      }
+
+      if (hasFatalError) {
+        if (issues.length > 0) {
+          await supabase.from("data_issues").insert(
+            issues.map((issue) => ({ job_id: jobId, tenant_id, ...issue }))
+          );
+        }
+        await supabase
+          .from("import_jobs")
+          .update({ status: "failed", ended_at: new Date().toISOString() })
+          .eq("id", jobId);
+
+        return new Response(
+          JSON.stringify({ job_id: jobId, status: "failed", stats: null, reviews: [], errors: errorResponses } as ApiResponse),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      for (const row of contactsRows) {
+        const externalRef = toStr(row["Référence"]);
+        const civilityRaw = toStr(row["Civilité"]) || "";
+        const nom = toStr(row["Nom"]);
+
+        if (!externalRef || !nom) continue;
+
+        const civilityInfo = getCivilityInfo(civilityRaw);
+
+        if (civilityInfo.isUnknown) {
+          issues.push({
+            severity: "warning",
+            code: "contacts_unknown_civility_value",
+            entity_type: "contact",
+            entity_key: externalRef,
+            message: `Unknown civility value: "${civilityRaw}", defaulting to physical`,
+            payload: { civility: civilityRaw },
+          });
+        }
+
+        const firstName = toStr(row["Prénom"]);
+        const displayName = getDisplayName(civilityInfo.contact_category, firstName, nom);
+
+        contactsMap.set(externalRef, {
+          external_ref: externalRef,
+          civility_raw: civilityRaw,
+          contact_category: civilityInfo.contact_category,
+          legal_form: civilityInfo.legal_form,
+          group_type: civilityInfo.group_type,
+          first_name: firstName,
+          last_name_or_name: nom,
+          display_name: displayName,
+          address_line1: toStr(row["Adresse 1"]),
+          address_line2: toStr(row["Adresse 2"]),
+          postcode: toStr(row["Code postal"]),
+          city: toStr(row["Ville"]),
+          country: toStr(row["Pays"]),
+          email: toStr(row["e-mail"]),
+          phone1: toStr(row["Téléphone 1"]),
+          phone2: toStr(row["Téléphone 2"]),
+        });
+      }
+
+      // Check for missing contacts for owner_refs (full mode only)
+      if (importMode === "full") {
+        for (const ownerRef of ownerToLots.keys()) {
+          if (!contactsMap.has(ownerRef)) {
+            issues.push({
+              severity: "warning",
+              code: "missing_contact_for_owner_ref",
+              entity_type: "contact",
+              entity_key: ownerRef,
+              message: `Owner reference "${ownerRef}" from lot_ref has no matching contact`,
+              payload: { owner_ref: ownerRef },
+            });
+          }
+        }
+      }
+
+      // Upsert contacts to database
+      for (const [ref, contact] of contactsMap) {
+        const { data: contactData, error: contactError } = await supabase
+          .from("contacts")
+          .upsert(
+            {
+              tenant_id,
+              external_ref: contact.external_ref,
+              civility_raw: contact.civility_raw,
+              contact_category: contact.contact_category,
+              legal_form: contact.legal_form,
+              group_type: contact.group_type,
+              first_name: contact.first_name,
+              last_name_or_name: contact.last_name_or_name,
+              display_name: contact.display_name,
+              address_line1: contact.address_line1,
+              address_line2: contact.address_line2,
+              postcode: contact.postcode,
+              city: contact.city,
+              country: contact.country,
+              email: contact.email,
+              phone1: contact.phone1,
+              phone2: contact.phone2,
+            },
+            { onConflict: "tenant_id,external_ref", ignoreDuplicates: false }
+          )
+          .select("id")
+          .single();
+
+        if (!contactError && contactData) {
+          contactIdMap.set(ref, contactData.id);
+          contactsUpserted++;
+        } else {
+          const { data: existingContact } = await supabase
+            .from("contacts")
+            .select("id")
+            .eq("tenant_id", tenant_id)
+            .eq("external_ref", ref)
+            .single();
+
+          if (existingContact) {
+            contactIdMap.set(ref, existingContact.id);
+            contactsUpserted++;
+          }
+        }
+      }
+    }
+
+    // ============================================================
+    // PHASE 5: BUILD UNITS (full mode only)
     // ============================================================
 
     let unitsCreated = 0;
@@ -1075,196 +1101,87 @@ serve(async (req) => {
     let unitOwnersCreated = 0;
     let reviewsCreated = 0;
 
-    for (const [ownerRef, lotNumbers] of ownerToLots) {
-      // Get lot details
-      const ownerLots = lotNumbers
-        .map((ln) => lotsMap.get(ln))
-        .filter((l): l is ParsedLot => l !== undefined);
+    if (importMode === "full") {
+      for (const [ownerRef, lotNumbers] of ownerToLots) {
+        const ownerLots = lotNumbers
+          .map((ln) => lotsMap.get(ln))
+          .filter((l): l is ParsedLot => l !== undefined);
 
-      // Classify lots
-      const mainHabLots = ownerLots.filter((l) => l.lot_family === "MAIN_HABITATION");
-      const mainCommLots = ownerLots.filter((l) => l.lot_family === "MAIN_COMMERCE");
-      const depLots = ownerLots.filter((l) => l.lot_family === "DEPENDANCE");
+        const mainHabLots = ownerLots.filter((l) => l.lot_family === "MAIN_HABITATION");
+        const mainCommLots = ownerLots.filter((l) => l.lot_family === "MAIN_COMMERCE");
+        const depLots = ownerLots.filter((l) => l.lot_family === "DEPENDANCE");
 
-      const contact = contactsMap.get(ownerRef);
-      const contactId = contactIdMap.get(ownerRef);
+        const contact = contactsMap.get(ownerRef);
+        const contactId = contactIdMap.get(ownerRef);
 
-      // ============================================================
-      // CASE: Multiple MAIN_HABITATION lots -> Review required
-      // ============================================================
-      if (mainHabLots.length >= 2) {
-        // Build proposals
-        const proposals = {
-          P1_split: mainHabLots.map((l) => ({
-            main_lot: l.lot_number,
-            unit_type: "habitation",
-            dep_lots: depLots.map((d) => d.lot_number),
-          })),
-          P2_merge: {
-            main_lot: mainHabLots[0].lot_number,
-            unit_type: "habitation",
-            all_lots: ownerLots.map((l) => l.lot_number),
-          },
-        };
+        // CASE: Multiple MAIN_HABITATION lots -> Review required
+        if (mainHabLots.length >= 2) {
+          const proposals = {
+            P1_split: mainHabLots.map((l) => ({
+              main_lot: l.lot_number,
+              unit_type: "habitation",
+              dep_lots: depLots.map((d) => d.lot_number),
+            })),
+            P2_merge: {
+              main_lot: mainHabLots[0].lot_number,
+              unit_type: "habitation",
+              all_lots: ownerLots.map((l) => l.lot_number),
+            },
+          };
 
-        const lotsInScope = {
-          main_habitation: mainHabLots.map((l) => ({
-            lot_number: l.lot_number,
-            lot_type_label: l.lot_type_label,
-          })),
-          main_commerce: mainCommLots.map((l) => ({
-            lot_number: l.lot_number,
-            lot_type_label: l.lot_type_label,
-          })),
-          dependance: depLots.map((l) => ({
-            lot_number: l.lot_number,
-            lot_type_label: l.lot_type_label,
-          })),
-        };
+          const lotsInScope = {
+            main_habitation: mainHabLots.map((l) => ({ lot_number: l.lot_number, lot_type_label: l.lot_type_label })),
+            main_commerce: mainCommLots.map((l) => ({ lot_number: l.lot_number, lot_type_label: l.lot_type_label })),
+            dependance: depLots.map((l) => ({ lot_number: l.lot_number, lot_type_label: l.lot_type_label })),
+          };
 
-        const { data: reviewData } = await supabase
-          .from("unit_build_reviews")
-          .insert({
-            tenant_id,
-            copro_id,
-            job_id: jobId,
-            owner_ref: ownerRef,
-            status: "pending_review",
-            reason: "multiple_habitation_main_lots",
-            lots_in_scope: lotsInScope,
-            proposals,
-          })
-          .select("id")
-          .single();
-
-        if (reviewData) {
-          reviewsCreated++;
-          reviewResponses.push({
-            review_id: reviewData.id,
-            owner_ref: ownerRef,
-            display_name: contact?.display_name || ownerRef,
-            contact_category: contact?.contact_category || "physical",
-            legal_form: contact?.legal_form || null,
-            group_type: contact?.group_type || null,
-            main_hab_lots: mainHabLots.map((l) => l.lot_number),
-            dep_lots: depLots.map((l) => l.lot_number),
-            reason: "multiple_habitation_main_lots",
-          });
-        }
-
-        continue; // Do NOT create units for this owner
-      }
-
-      // ============================================================
-      // CASE: Exactly 1 main lot (habitation OR commerce)
-      // ============================================================
-      const mainLot = mainHabLots[0] || mainCommLots[0];
-
-      if (mainLot) {
-        const unitType = mainLot.lot_family === "MAIN_HABITATION" ? "habitation" : "commercial";
-
-        // Create unit
-        const { data: unitData, error: unitError } = await supabase
-          .from("units")
-          .insert({
-            tenant_id,
-            copro_id,
-            unit_type: unitType,
-            status: "active",
-            main_lot_number: mainLot.lot_number,
-            source_owner_external_ref: ownerRef,
-            source_job_id: jobId,
-          })
-          .select("id")
-          .single();
-
-        if (unitError || !unitData) continue;
-
-        unitsCreated++;
-        const unitId = unitData.id;
-
-        // Create unit_lots (main lot)
-        const mainLotId = lotIdMap.get(mainLot.lot_number);
-        if (mainLotId) {
-          await supabase.from("unit_lots").insert({
-            tenant_id,
-            unit_id: unitId,
-            lot_id: mainLotId,
-            role: "main",
-          });
-          unitLotsCreated++;
-        }
-
-        // Create unit_lots (annex lots = all dependances)
-        for (const depLot of depLots) {
-          const depLotId = lotIdMap.get(depLot.lot_number);
-          if (depLotId) {
-            await supabase.from("unit_lots").insert({
+          const { data: reviewData } = await supabase
+            .from("unit_build_reviews")
+            .insert({
               tenant_id,
-              unit_id: unitId,
-              lot_id: depLotId,
-              role: "annex",
+              copro_id,
+              job_id: jobId,
+              owner_ref: ownerRef,
+              status: "pending_review",
+              reason: "multiple_habitation_main_lots",
+              lots_in_scope: lotsInScope,
+              proposals,
+            })
+            .select("id")
+            .single();
+
+          if (reviewData) {
+            reviewsCreated++;
+            reviewResponses.push({
+              review_id: reviewData.id,
+              owner_ref: ownerRef,
+              display_name: contact?.display_name || ownerRef,
+              contact_category: contact?.contact_category || "physical",
+              legal_form: contact?.legal_form || null,
+              group_type: contact?.group_type || null,
+              main_hab_lots: mainHabLots.map((l) => l.lot_number),
+              dep_lots: depLots.map((l) => l.lot_number),
+              reason: "multiple_habitation_main_lots",
             });
-            unitLotsCreated++;
           }
+
+          continue;
         }
 
-        // Create unit_owners
-        if (contactId) {
-          await supabase.from("unit_owners").insert({
-            tenant_id,
-            unit_id: unitId,
-            contact_id: contactId,
-          });
-          unitOwnersCreated++;
-        }
+        // CASE: Exactly 1 main lot (habitation OR commerce)
+        const mainLot = mainHabLots[0] || mainCommLots[0];
 
-        // Create unit_addresses (main address)
-        if (mainAddressId) {
-          await supabase.from("unit_addresses").insert({
-            tenant_id,
-            unit_id: unitId,
-            address_id: mainAddressId,
-            role: "main",
-          });
-        }
+        if (mainLot) {
+          const unitType = mainLot.lot_family === "MAIN_HABITATION" ? "habitation" : "commercial";
 
-        // Create unit_parcels (all copro parcels)
-        for (const parcelId of parcelIds) {
-          await supabase.from("unit_parcels").insert({
-            tenant_id,
-            unit_id: unitId,
-            parcel_id: parcelId,
-          });
-        }
-
-        continue;
-      }
-
-      // ============================================================
-      // CASE: Dependance-only (no main lot)
-      // ============================================================
-      if (depLots.length > 0) {
-        // Group dependances by normalized lot_type_label
-        const depByType = new Map<string, ParsedLot[]>();
-        for (const dep of depLots) {
-          const normalizedType = dep.lot_type_label.toLowerCase().trim();
-          if (!depByType.has(normalizedType)) {
-            depByType.set(normalizedType, []);
-          }
-          depByType.get(normalizedType)!.push(dep);
-        }
-
-        // Create one unit per dependance type
-        for (const [depType, lotsOfType] of depByType) {
           const { data: unitData, error: unitError } = await supabase
             .from("units")
             .insert({
               tenant_id,
               copro_id,
-              unit_type: "dependance",
+              unit_type: unitType,
               status: "active",
-              main_lot_number: lotsOfType[0].lot_number,
+              main_lot_number: mainLot.lot_number,
               source_owner_external_ref: ownerRef,
               source_job_id: jobId,
             })
@@ -1276,47 +1193,87 @@ serve(async (req) => {
           unitsCreated++;
           const unitId = unitData.id;
 
-          // Create unit_lots for all lots of this type
-          for (const lot of lotsOfType) {
-            const lotId = lotIdMap.get(lot.lot_number);
-            if (lotId) {
-              await supabase.from("unit_lots").insert({
-                tenant_id,
-                unit_id: unitId,
-                lot_id: lotId,
-                role: "main",
-              });
+          const mainLotId = lotIdMap.get(mainLot.lot_number);
+          if (mainLotId) {
+            await supabase.from("unit_lots").insert({ tenant_id, unit_id: unitId, lot_id: mainLotId, role: "main" });
+            unitLotsCreated++;
+          }
+
+          for (const depLot of depLots) {
+            const depLotId = lotIdMap.get(depLot.lot_number);
+            if (depLotId) {
+              await supabase.from("unit_lots").insert({ tenant_id, unit_id: unitId, lot_id: depLotId, role: "annex" });
               unitLotsCreated++;
             }
           }
 
-          // Create unit_owners
           if (contactId) {
-            await supabase.from("unit_owners").insert({
-              tenant_id,
-              unit_id: unitId,
-              contact_id: contactId,
-            });
+            await supabase.from("unit_owners").insert({ tenant_id, unit_id: unitId, contact_id: contactId });
             unitOwnersCreated++;
           }
 
-          // Create unit_addresses (main address)
           if (mainAddressId) {
-            await supabase.from("unit_addresses").insert({
-              tenant_id,
-              unit_id: unitId,
-              address_id: mainAddressId,
-              role: "main",
-            });
+            await supabase.from("unit_addresses").insert({ tenant_id, unit_id: unitId, address_id: mainAddressId, role: "main" });
           }
 
-          // Create unit_parcels (all copro parcels)
           for (const parcelId of parcelIds) {
-            await supabase.from("unit_parcels").insert({
-              tenant_id,
-              unit_id: unitId,
-              parcel_id: parcelId,
-            });
+            await supabase.from("unit_parcels").insert({ tenant_id, unit_id: unitId, parcel_id: parcelId });
+          }
+
+          continue;
+        }
+
+        // CASE: Dependance-only (no main lot)
+        if (depLots.length > 0) {
+          const depByType = new Map<string, ParsedLot[]>();
+          for (const dep of depLots) {
+            const normalizedType = dep.lot_type_label.toLowerCase().trim();
+            if (!depByType.has(normalizedType)) {
+              depByType.set(normalizedType, []);
+            }
+            depByType.get(normalizedType)!.push(dep);
+          }
+
+          for (const [, lotsOfType] of depByType) {
+            const { data: unitData, error: unitError } = await supabase
+              .from("units")
+              .insert({
+                tenant_id,
+                copro_id,
+                unit_type: "dependance",
+                status: "active",
+                main_lot_number: lotsOfType[0].lot_number,
+                source_owner_external_ref: ownerRef,
+                source_job_id: jobId,
+              })
+              .select("id")
+              .single();
+
+            if (unitError || !unitData) continue;
+
+            unitsCreated++;
+            const unitId = unitData.id;
+
+            for (const lot of lotsOfType) {
+              const lotId = lotIdMap.get(lot.lot_number);
+              if (lotId) {
+                await supabase.from("unit_lots").insert({ tenant_id, unit_id: unitId, lot_id: lotId, role: "main" });
+                unitLotsCreated++;
+              }
+            }
+
+            if (contactId) {
+              await supabase.from("unit_owners").insert({ tenant_id, unit_id: unitId, contact_id: contactId });
+              unitOwnersCreated++;
+            }
+
+            if (mainAddressId) {
+              await supabase.from("unit_addresses").insert({ tenant_id, unit_id: unitId, address_id: mainAddressId, role: "main" });
+            }
+
+            for (const parcelId of parcelIds) {
+              await supabase.from("unit_parcels").insert({ tenant_id, unit_id: unitId, parcel_id: parcelId });
+            }
           }
         }
       }
@@ -1326,25 +1283,16 @@ serve(async (req) => {
     // SAVE ISSUES AND FINALIZE JOB
     // ============================================================
 
-    // Save all issues to database
     if (issues.length > 0) {
       await supabase.from("data_issues").insert(
-        issues.map((issue) => ({
-          job_id: jobId,
-          tenant_id,
-          ...issue,
-        }))
+        issues.map((issue) => ({ job_id: jobId, tenant_id, ...issue }))
       );
     }
 
-    // Count issues by severity
     const issuesWarning = issues.filter((i) => i.severity === "warning").length;
     const issuesError = issues.filter((i) => i.severity === "error").length;
-
-    // Determine final status
     const finalStatus = reviewsCreated > 0 ? "completed_with_review_required" : "completed";
 
-    // Build stats
     const stats: Stats = {
       lots_upserted: lotsUpserted,
       contacts_upserted: contactsUpserted,
@@ -1356,34 +1304,19 @@ serve(async (req) => {
       issues_error: issuesError,
     };
 
-    // Update job
     await supabase
       .from("import_jobs")
-      .update({
-        status: finalStatus,
-        stats,
-        ended_at: new Date().toISOString(),
-      })
+      .update({ status: finalStatus, stats, ended_at: new Date().toISOString() })
       .eq("id", jobId);
 
-    // Return response
-    const response: ApiResponse = {
-      job_id: jobId,
-      status: finalStatus,
-      stats,
-      reviews: reviewResponses,
-      errors: [],
-    };
-
-    return new Response(JSON.stringify(response), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-      status: 200,
-    });
+    return new Response(
+      JSON.stringify({ job_id: jobId, status: finalStatus, stats, reviews: reviewResponses, errors: [] } as ApiResponse),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+    );
 
   } catch (error) {
     console.error("Error in edd-import:", error);
 
-    // Update job status to failed if we have a job
     if (jobId) {
       const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
       const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -1391,10 +1324,7 @@ serve(async (req) => {
 
       await supabase
         .from("import_jobs")
-        .update({
-          status: "failed",
-          ended_at: new Date().toISOString(),
-        })
+        .update({ status: "failed", ended_at: new Date().toISOString() })
         .eq("id", jobId);
     }
 
@@ -1404,19 +1334,10 @@ serve(async (req) => {
         status: "failed",
         stats: null,
         reviews: [],
-        errors: [
-          {
-            code: "internal_error",
-            message: "An internal error occurred during import",
-            entity: "system",
-          },
-        ],
+        errors: [{ code: "internal_error", message: "An internal error occurred during import", entity: "system" }],
       } as ApiResponse),
       {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Content-Type": "application/json",
-        },
+        headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
         status: 500,
       }
     );
