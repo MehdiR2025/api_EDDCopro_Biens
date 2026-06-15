@@ -7,33 +7,24 @@
   },
   "item": [
     {
-      "name": "POST /edd-import",
+      "name": "POST /edd-import (full)",
       "request": {
         "method": "POST",
         "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{SUPABASE_ANON_KEY}}"
-          },
-          {
-            "key": "apikey",
-            "value": "{{SUPABASE_ANON_KEY}}"
-          }
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" },
+          { "key": "apikey", "value": "{{SUPABASE_ANON_KEY}}" }
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    },\n    {\n      \"label\": \"14 rue de la Paix, 75001 Paris\",\n      \"role\": \"secondary\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\n    \"75101000AB0001\",\n    \"75101000AB0002\"\n  ],\n  \"files\": {\n    \"edd_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/edd_vf.xlsx\",\n    \"lot_ref_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/contacts.xlsx\"\n  }\n}"
+          "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    { \"label\": \"12 rue de la Paix, 75001 Paris\", \"role\": \"main\" },\n    { \"label\": \"14 rue de la Paix, 75001 Paris\", \"role\": \"secondary\" }\n  ],\n  \"copro_cadastral_refs\": [\"75101000AB0001\", \"75101000AB0002\"],\n  \"files\": {\n    \"edd_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/edd_vf.xlsx\",\n    \"lot_ref_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/contacts.xlsx\"\n  }\n}"
         },
         "url": {
           "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
           "host": ["{{SUPABASE_URL}}"],
           "path": ["functions", "v1", "edd-import"]
         },
-        "description": "Import EDD: crée les lots, contacts et units à partir des 3 fichiers Excel"
+        "description": "Import complet (defaut) : cree les lots, contacts et units a partir des 3 fichiers Excel"
       },
       "response": [
         {
@@ -41,18 +32,12 @@
           "originalRequest": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{SUPABASE_ANON_KEY}}"
-              }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": {\n    \"edd_path\": \"imports/tenant/edd.xlsx\",\n    \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/tenant/contacts.xlsx\"\n  }\n}"
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [{ \"label\": \"12 rue de la Paix, 75001 Paris\", \"role\": \"main\" }],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": { \"edd_path\": \"imports/tenant/edd.xlsx\", \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\", \"contacts_path\": \"imports/tenant/contacts.xlsx\" }\n}"
             },
             "url": {
               "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
@@ -63,31 +48,20 @@
           "status": "OK",
           "code": 200,
           "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "body": "{\n  \"job_id\": \"770e8400-e29b-41d4-a716-446655440002\",\n  \"status\": \"completed\",\n  \"stats\": {\n    \"lots_upserted\": 45,\n    \"contacts_upserted\": 28,\n    \"units_created\": 25,\n    \"unit_lots_created\": 52,\n    \"unit_owners_created\": 25,\n    \"reviews_created\": 0,\n    \"issues_warning\": 3,\n    \"issues_error\": 0\n  },\n  \"reviews\": [],\n  \"errors\": []\n}"
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\"job_id\":\"770e8400-e29b-41d4-a716-446655440002\",\"status\":\"completed\",\"stats\":{\"lots_upserted\":45,\"contacts_upserted\":28,\"units_created\":25,\"unit_lots_created\":52,\"unit_owners_created\":25,\"reviews_created\":0,\"issues_warning\":3,\"issues_error\":0},\"reviews\":[],\"errors\":[]}"
         },
         {
           "name": "SUCCESS - Review required",
           "originalRequest": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{SUPABASE_ANON_KEY}}"
-              }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": {\n    \"edd_path\": \"imports/tenant/edd.xlsx\",\n    \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/tenant/contacts.xlsx\"\n  }\n}"
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [{ \"label\": \"12 rue de la Paix, 75001 Paris\", \"role\": \"main\" }],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": { \"edd_path\": \"imports/tenant/edd.xlsx\", \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\", \"contacts_path\": \"imports/tenant/contacts.xlsx\" }\n}"
             },
             "url": {
               "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
@@ -98,31 +72,20 @@
           "status": "OK",
           "code": 200,
           "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "body": "{\n  \"job_id\": \"880e8400-e29b-41d4-a716-446655440003\",\n  \"status\": \"completed_with_review_required\",\n  \"stats\": {\n    \"lots_upserted\": 50,\n    \"contacts_upserted\": 30,\n    \"units_created\": 22,\n    \"unit_lots_created\": 45,\n    \"unit_owners_created\": 22,\n    \"reviews_created\": 2,\n    \"issues_warning\": 5,\n    \"issues_error\": 0\n  },\n  \"reviews\": [\n    {\n      \"review_id\": \"990e8400-e29b-41d4-a716-446655440004\",\n      \"owner_ref\": \"REF001\",\n      \"display_name\": \"Jean Dupont\",\n      \"contact_category\": \"physical\",\n      \"legal_form\": null,\n      \"group_type\": null,\n      \"main_hab_lots\": [\"101\", \"102\"],\n      \"dep_lots\": [\"C01\", \"P15\"],\n      \"reason\": \"multiple_habitation_main_lots\"\n    },\n    {\n      \"review_id\": \"aa0e8400-e29b-41d4-a716-446655440005\",\n      \"owner_ref\": \"REF015\",\n      \"display_name\": \"SCI Les Tilleuls\",\n      \"contact_category\": \"legal_entity\",\n      \"legal_form\": \"SCI\",\n      \"group_type\": null,\n      \"main_hab_lots\": [\"201\", \"205\", \"208\"],\n      \"dep_lots\": [\"C12\"],\n      \"reason\": \"multiple_habitation_main_lots\"\n    }\n  ],\n  \"errors\": []\n}"
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\"job_id\":\"880e8400-e29b-41d4-a716-446655440003\",\"status\":\"completed_with_review_required\",\"stats\":{\"lots_upserted\":50,\"contacts_upserted\":30,\"units_created\":22,\"unit_lots_created\":45,\"unit_owners_created\":22,\"reviews_created\":2,\"issues_warning\":5,\"issues_error\":0},\"reviews\":[{\"review_id\":\"990e8400-e29b-41d4-a716-446655440004\",\"owner_ref\":\"REF001\",\"display_name\":\"Jean Dupont\",\"contact_category\":\"physical\",\"legal_form\":null,\"group_type\":null,\"main_hab_lots\":[\"101\",\"102\"],\"dep_lots\":[\"C01\",\"P15\"],\"reason\":\"multiple_habitation_main_lots\"}],\"errors\":[]}"
         },
         {
           "name": "FAILED - Missing required column",
           "originalRequest": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{SUPABASE_ANON_KEY}}"
-              }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [\n    {\n      \"label\": \"12 rue de la Paix, 75001 Paris\",\n      \"role\": \"main\"\n    }\n  ],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": {\n    \"edd_path\": \"imports/tenant/edd_invalid.xlsx\",\n    \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\",\n    \"contacts_path\": \"imports/tenant/contacts.xlsx\"\n  }\n}"
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"copro_addresses\": [{ \"label\": \"12 rue de la Paix, 75001 Paris\", \"role\": \"main\" }],\n  \"copro_cadastral_refs\": [\"75101000AB0001\"],\n  \"files\": { \"edd_path\": \"imports/tenant/edd_invalid.xlsx\", \"lot_ref_path\": \"imports/tenant/lot_ref.xlsx\", \"contacts_path\": \"imports/tenant/contacts.xlsx\" }\n}"
             },
             "url": {
               "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
@@ -133,13 +96,102 @@
           "status": "OK",
           "code": 200,
           "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\"job_id\":\"bb0e8400-e29b-41d4-a716-446655440006\",\"status\":\"failed\",\"stats\":null,\"reviews\":[],\"errors\":[{\"code\":\"edd_missing_required_column\",\"message\":\"Missing required column: NumLot\",\"entity\":\"edd\",\"column\":\"NumLot\"}]}"
+        }
+      ]
+    },
+    {
+      "name": "POST /edd-import (lots_only)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" },
+          { "key": "apikey", "value": "{{SUPABASE_ANON_KEY}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"import_mode\": \"lots_only\",\n  \"files\": {\n    \"edd_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/edd_vf.xlsx\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+          "host": ["{{SUPABASE_URL}}"],
+          "path": ["functions", "v1", "edd-import"]
+        },
+        "description": "Re-import partiel : met a jour uniquement les lots (surfaces, tantiemes, etage, etc.) sans toucher aux contacts ni aux units existants. Seul edd_path est requis."
+      },
+      "response": [
+        {
+          "name": "SUCCESS - lots_only",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"import_mode\": \"lots_only\",\n  \"files\": { \"edd_path\": \"imports/tenant/edd.xlsx\" }\n}"
+            },
+            "url": {
+              "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+              "host": ["{{SUPABASE_URL}}"],
+              "path": ["functions", "v1", "edd-import"]
             }
-          ],
-          "body": "{\n  \"job_id\": \"bb0e8400-e29b-41d4-a716-446655440006\",\n  \"status\": \"failed\",\n  \"stats\": null,\n  \"reviews\": [],\n  \"errors\": [\n    {\n      \"code\": \"edd_missing_required_column\",\n      \"message\": \"Missing required column: NumLot\",\n      \"entity\": \"edd\",\n      \"column\": \"NumLot\"\n    },\n    {\n      \"code\": \"contacts_missing_required_column\",\n      \"message\": \"Missing required column: Civilité\",\n      \"entity\": \"contacts\",\n      \"column\": \"Civilité\"\n    }\n  ]\n}"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\"job_id\":\"cc0e8400-e29b-41d4-a716-446655440007\",\"status\":\"completed\",\"stats\":{\"lots_upserted\":45,\"contacts_upserted\":0,\"units_created\":0,\"unit_lots_created\":0,\"unit_owners_created\":0,\"reviews_created\":0,\"issues_warning\":2,\"issues_error\":0},\"reviews\":[],\"errors\":[]}"
+        }
+      ]
+    },
+    {
+      "name": "POST /edd-import (contacts_only)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" },
+          { "key": "apikey", "value": "{{SUPABASE_ANON_KEY}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"import_mode\": \"contacts_only\",\n  \"files\": {\n    \"contacts_path\": \"imports/550e8400-e29b-41d4-a716-446655440000/contacts.xlsx\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+          "host": ["{{SUPABASE_URL}}"],
+          "path": ["functions", "v1", "edd-import"]
+        },
+        "description": "Re-import partiel : met a jour uniquement les contacts (nom, email, adresse, telephone, etc.) sans toucher aux lots ni aux units existants. Seul contacts_path est requis."
+      },
+      "response": [
+        {
+          "name": "SUCCESS - contacts_only",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{SUPABASE_ANON_KEY}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenant_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"copro_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"import_mode\": \"contacts_only\",\n  \"files\": { \"contacts_path\": \"imports/tenant/contacts.xlsx\" }\n}"
+            },
+            "url": {
+              "raw": "{{SUPABASE_URL}}/functions/v1/edd-import",
+              "host": ["{{SUPABASE_URL}}"],
+              "path": ["functions", "v1", "edd-import"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\"job_id\":\"dd0e8400-e29b-41d4-a716-446655440008\",\"status\":\"completed\",\"stats\":{\"lots_upserted\":0,\"contacts_upserted\":28,\"units_created\":0,\"unit_lots_created\":0,\"unit_owners_created\":0,\"reviews_created\":0,\"issues_warning\":0,\"issues_error\":0},\"reviews\":[],\"errors\":[]}"
         }
       ]
     }
